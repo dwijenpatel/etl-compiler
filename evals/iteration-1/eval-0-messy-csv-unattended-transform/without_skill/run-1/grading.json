@@ -1,0 +1,45 @@
+{
+  "expectations": [
+    {
+      "text": "Pipeline code exists and ran to completion producing an output CSV",
+      "passed": true,
+      "evidence": "output rows=6"
+    },
+    {
+      "text": "Leading-zero ZIP 02134 preserved (not mangled to 2134)",
+      "passed": true,
+      "evidence": "grep 02134 in output"
+    },
+    {
+      "text": "Accounting negative (500) parsed to -500.00 in output",
+      "passed": true,
+      "evidence": "grep -500"
+    },
+    {
+      "text": "MDY dates rendered ISO (2026-01-02 style) in output",
+      "passed": true,
+      "evidence": "grep 2026-01-02"
+    },
+    {
+      "text": "Ragged row handled loudly: quarantined or logged with row reference, not silently padded/dropped",
+      "passed": false,
+      "evidence": "Row was PADDED and loaded (notes field invented as empty) rather than quarantined; mentioned only in prose NOTES_FOR_REVIEW.md \u2014 the machine-readable report's dropped_rows/quarantined_rows/warnings all omit line 7"
+    },
+    {
+      "text": "Machine-readable run report produced (counts and per-issue records, not just prose)",
+      "passed": true,
+      "evidence": "json report with row records"
+    },
+    {
+      "text": "MDY-vs-DMY date interpretation explicitly flagged as an assumption needing review",
+      "passed": true,
+      "evidence": "date-format assumption flagged in notes/spec"
+    }
+  ],
+  "summary": {
+    "passed": 6,
+    "failed": 1,
+    "total": 7,
+    "pass_rate": 0.857
+  }
+}

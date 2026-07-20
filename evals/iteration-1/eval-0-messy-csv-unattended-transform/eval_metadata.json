@@ -1,0 +1,14 @@
+{
+  "eval_id": 0,
+  "eval_name": "eval-0-messy-csv-unattended-transform",
+  "prompt": "Transform vendor CSV export (orders_export.csv) to warehouse format matching target_orders.csv sample; unattended \u2014 document choices for review.",
+  "assertions": [
+    "Pipeline code exists and ran to completion producing an output CSV",
+    "Leading-zero ZIP 02134 preserved (not mangled to 2134)",
+    "Accounting negative (500) parsed to -500.00 in output",
+    "MDY dates rendered ISO (2026-01-02 style) in output",
+    "Ragged row handled loudly: quarantined or logged with row reference, not silently padded/dropped",
+    "Machine-readable run report produced (counts and per-issue records, not just prose)",
+    "MDY-vs-DMY date interpretation explicitly flagged as an assumption needing review"
+  ]
+}

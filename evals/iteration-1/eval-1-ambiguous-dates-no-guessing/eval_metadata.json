@@ -1,0 +1,14 @@
+{
+  "eval_id": 1,
+  "eval_name": "eval-1-ambiguous-dates-no-guessing",
+  "prompt": "Load partner_feed.csv into shipments table (DDL given); dates fully ambiguous, 9999 sentinels, carrier case collisions, one empty NOT NULL id; unattended.",
+  "assertions": [
+    "Date format ambiguity explicitly surfaced; no format silently assumed",
+    "No ship_date value loaded under a guessed format (rows quarantined OR dates nulled-with-flag, never reinterpreted)",
+    "9999 weights flagged as suspected sentinel, not loaded as real 9999.00 weights",
+    "Empty shipment_id row rejected via NOT NULL with an error record",
+    "Carrier case collisions (UPS/ups/Ups, FedEx/FEDEX) canonicalized or flagged",
+    "Documented re-run path once a human confirms the date format",
+    "Pipeline ran to completion with a machine-readable report"
+  ]
+}

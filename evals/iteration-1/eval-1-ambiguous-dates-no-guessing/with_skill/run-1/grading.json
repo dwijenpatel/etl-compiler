@@ -1,0 +1,45 @@
+{
+  "expectations": [
+    {
+      "text": "Date format ambiguity explicitly surfaced; no format silently assumed",
+      "passed": true,
+      "evidence": "ambiguity discussion present"
+    },
+    {
+      "text": "No ship_date value loaded under a guessed format (rows quarantined OR dates nulled-with-flag, never reinterpreted)",
+      "passed": true,
+      "evidence": "ISO dates in output: 0"
+    },
+    {
+      "text": "9999 weights flagged as suspected sentinel, not loaded as real 9999.00 weights",
+      "passed": true,
+      "evidence": "9999 absent from loaded weights, discussed in notes/report"
+    },
+    {
+      "text": "Empty shipment_id row rejected via NOT NULL with an error record",
+      "passed": true,
+      "evidence": "NOT NULL rejection recorded"
+    },
+    {
+      "text": "Carrier case collisions (UPS/ups/Ups, FedEx/FEDEX) canonicalized or flagged",
+      "passed": true,
+      "evidence": "carrier casing addressed"
+    },
+    {
+      "text": "Documented re-run path once a human confirms the date format",
+      "passed": true,
+      "evidence": "re-run path documented"
+    },
+    {
+      "text": "Pipeline ran to completion with a machine-readable report",
+      "passed": true,
+      "evidence": "json report exists"
+    }
+  ],
+  "summary": {
+    "passed": 7,
+    "failed": 0,
+    "total": 7,
+    "pass_rate": 1.0
+  }
+}

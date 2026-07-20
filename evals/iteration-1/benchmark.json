@@ -1,0 +1,373 @@
+{
+  "metadata": {
+    "skill_name": "etl-generator",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-07-18T00:05:00Z",
+    "evals_run": [
+      0,
+      1,
+      2
+    ],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": 0,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 7,
+        "failed": 0,
+        "total": 7,
+        "time_seconds": 454.8,
+        "tokens": 103176,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Pipeline code exists and ran to completion producing an output CSV",
+          "passed": true,
+          "evidence": "output rows=6"
+        },
+        {
+          "text": "Leading-zero ZIP 02134 preserved (not mangled to 2134)",
+          "passed": true,
+          "evidence": "grep 02134 in output"
+        },
+        {
+          "text": "Accounting negative (500) parsed to -500.00 in output",
+          "passed": true,
+          "evidence": "grep -500"
+        },
+        {
+          "text": "MDY dates rendered ISO (2026-01-02 style) in output",
+          "passed": true,
+          "evidence": "grep 2026-01-02"
+        },
+        {
+          "text": "Ragged row handled loudly: quarantined or logged with row reference, not silently padded/dropped",
+          "passed": true,
+          "evidence": "Quarantined with coded record: errors.jsonl row 7 STR-02 'expected 7 fields, got 6'; raw row preserved in quarantine.csv"
+        },
+        {
+          "text": "Machine-readable run report produced (counts and per-issue records, not just prose)",
+          "passed": true,
+          "evidence": "json report with row records"
+        },
+        {
+          "text": "MDY-vs-DMY date interpretation explicitly flagged as an assumption needing review",
+          "passed": true,
+          "evidence": "date-format assumption flagged in notes/spec"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 7,
+        "failed": 0,
+        "total": 7,
+        "time_seconds": 332.0,
+        "tokens": 85799,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Date format ambiguity explicitly surfaced; no format silently assumed",
+          "passed": true,
+          "evidence": "ambiguity discussion present"
+        },
+        {
+          "text": "No ship_date value loaded under a guessed format (rows quarantined OR dates nulled-with-flag, never reinterpreted)",
+          "passed": true,
+          "evidence": "ISO dates in output: 0"
+        },
+        {
+          "text": "9999 weights flagged as suspected sentinel, not loaded as real 9999.00 weights",
+          "passed": true,
+          "evidence": "9999 absent from loaded weights, discussed in notes/report"
+        },
+        {
+          "text": "Empty shipment_id row rejected via NOT NULL with an error record",
+          "passed": true,
+          "evidence": "NOT NULL rejection recorded"
+        },
+        {
+          "text": "Carrier case collisions (UPS/ups/Ups, FedEx/FEDEX) canonicalized or flagged",
+          "passed": true,
+          "evidence": "carrier casing addressed"
+        },
+        {
+          "text": "Documented re-run path once a human confirms the date format",
+          "passed": true,
+          "evidence": "re-run path documented"
+        },
+        {
+          "text": "Pipeline ran to completion with a machine-readable report",
+          "passed": true,
+          "evidence": "json report exists"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "failed": 0,
+        "total": 6,
+        "time_seconds": 85.0,
+        "tokens": 53198,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Pipeline runs clean: 4 rows in, 4 rows out, 0 quarantined",
+          "passed": true,
+          "evidence": "output data rows=4"
+        },
+        {
+          "text": "N/A sentinel in dt becomes null order_date (not a row error)",
+          "passed": true,
+          "evidence": "row3='20000003,Cora Diaz,310.25,,true,10001'"
+        },
+        {
+          "text": "01/15/2026 rendered as 2026-01-15 (spec's MDY + ISO rendering honored)",
+          "passed": true,
+          "evidence": "grep 2026-01-15"
+        },
+        {
+          "text": "$2,450.00 parsed to 2450.00 and (75) to -75.00",
+          "passed": true,
+          "evidence": "grep 2450.00 / -75.00"
+        },
+        {
+          "text": "Leading-zero zip 02134 preserved as string",
+          "passed": true,
+          "evidence": "grep 02134"
+        },
+        {
+          "text": "No spec decision contradicted in generated code or output",
+          "passed": true,
+          "evidence": "spot-checks of MDY/negatives/zip/booleans all hold"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 0,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.857,
+        "passed": 6,
+        "failed": 1,
+        "total": 7,
+        "time_seconds": 196.6,
+        "tokens": 50121,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Pipeline code exists and ran to completion producing an output CSV",
+          "passed": true,
+          "evidence": "output rows=6"
+        },
+        {
+          "text": "Leading-zero ZIP 02134 preserved (not mangled to 2134)",
+          "passed": true,
+          "evidence": "grep 02134 in output"
+        },
+        {
+          "text": "Accounting negative (500) parsed to -500.00 in output",
+          "passed": true,
+          "evidence": "grep -500"
+        },
+        {
+          "text": "MDY dates rendered ISO (2026-01-02 style) in output",
+          "passed": true,
+          "evidence": "grep 2026-01-02"
+        },
+        {
+          "text": "Ragged row handled loudly: quarantined or logged with row reference, not silently padded/dropped",
+          "passed": false,
+          "evidence": "Row was PADDED and loaded (notes field invented as empty) rather than quarantined; mentioned only in prose NOTES_FOR_REVIEW.md \u2014 the machine-readable report's dropped_rows/quarantined_rows/warnings all omit line 7"
+        },
+        {
+          "text": "Machine-readable run report produced (counts and per-issue records, not just prose)",
+          "passed": true,
+          "evidence": "json report with row records"
+        },
+        {
+          "text": "MDY-vs-DMY date interpretation explicitly flagged as an assumption needing review",
+          "passed": true,
+          "evidence": "date-format assumption flagged in notes/spec"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 7,
+        "failed": 0,
+        "total": 7,
+        "time_seconds": 162.3,
+        "tokens": 44825,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Date format ambiguity explicitly surfaced; no format silently assumed",
+          "passed": true,
+          "evidence": "ambiguity discussion present"
+        },
+        {
+          "text": "No ship_date value loaded under a guessed format (rows quarantined OR dates nulled-with-flag, never reinterpreted)",
+          "passed": true,
+          "evidence": "ISO dates in output: 0"
+        },
+        {
+          "text": "9999 weights flagged as suspected sentinel, not loaded as real 9999.00 weights",
+          "passed": true,
+          "evidence": "9999 absent from loaded weights, discussed in notes/report"
+        },
+        {
+          "text": "Empty shipment_id row rejected via NOT NULL with an error record",
+          "passed": true,
+          "evidence": "NOT NULL rejection recorded"
+        },
+        {
+          "text": "Carrier case collisions (UPS/ups/Ups, FedEx/FEDEX) canonicalized or flagged",
+          "passed": true,
+          "evidence": "carrier casing addressed"
+        },
+        {
+          "text": "Documented re-run path once a human confirms the date format",
+          "passed": true,
+          "evidence": "re-run path documented"
+        },
+        {
+          "text": "Pipeline ran to completion with a machine-readable report",
+          "passed": true,
+          "evidence": "json report exists"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "failed": 0,
+        "total": 6,
+        "time_seconds": 145.2,
+        "tokens": 48587,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Pipeline runs clean: 4 rows in, 4 rows out, 0 quarantined",
+          "passed": true,
+          "evidence": "output data rows=4"
+        },
+        {
+          "text": "N/A sentinel in dt becomes null order_date (not a row error)",
+          "passed": true,
+          "evidence": "row3='20000003,Cora Diaz,310.25,,true,10001'"
+        },
+        {
+          "text": "01/15/2026 rendered as 2026-01-15 (spec's MDY + ISO rendering honored)",
+          "passed": true,
+          "evidence": "grep 2026-01-15"
+        },
+        {
+          "text": "$2,450.00 parsed to 2450.00 and (75) to -75.00",
+          "passed": true,
+          "evidence": "grep 2450.00 / -75.00"
+        },
+        {
+          "text": "Leading-zero zip 02134 preserved as string",
+          "passed": true,
+          "evidence": "grep 02134"
+        },
+        {
+          "text": "No spec decision contradicted in generated code or output",
+          "passed": true,
+          "evidence": "spot-checks of MDY/negatives/zip/booleans all hold"
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 290.6,
+        "stddev": 188.344,
+        "min": 85.0,
+        "max": 454.8
+      },
+      "tokens": {
+        "mean": 80724.3333,
+        "stddev": 25372.5108,
+        "min": 53198,
+        "max": 103176
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.9523,
+        "stddev": 0.0826,
+        "min": 0.857,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 168.0333,
+        "stddev": 26.1752,
+        "min": 145.2,
+        "max": 196.6
+      },
+      "tokens": {
+        "mean": 47844.3333,
+        "stddev": 2724.9898,
+        "min": 44825,
+        "max": 50121
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.05",
+      "time_seconds": "+122.6",
+      "tokens": "+32880"
+    }
+  },
+  "notes": "Analyst pass. (1) The baseline is strong \u2014 this model writes good ETL unaided, so the headline delta (100% vs 95%) understates the qualitative gap; the differences live in *contract*, not capability. (2) The one baseline failure is the archetypal one: eval-0 baseline PADDED the ragged row into the output (inventing a value) and its machine-readable report omits that row entirely \u2014 prose notes were honest, telemetry was not. The skill quarantined the same row with a coded error record (STR-02). (3) Non-assertion divergences worth noticing: eval-0 baseline silently DROPPED the exact-duplicate row (taxonomy default is keep-and-report; a repeated order is destroyed); it also auto-repaired mojibake by default, where the skill treats repair as opt-in (flagged ENC-06). Neither was asserted \u2014 candidate assertions for iteration 2. (4) Eval-1 assertions did not discriminate (7/7 both): the never-guess-dates behavior is model-innate here. The real difference is disposition: skill quarantined ambiguous-date rows for reprocessing; baseline loaded them with NULL dates + annotation \u2014 different downstream semantics, same 'didn't guess' credit. Consider a sharper assertion about reprocessability. (5) Eval-2 shows the composability payoff: with-skill was FASTER (85s vs 145s) and equal-token, because regeneration from a spec over a known runtime is mostly mechanical. The skill's cost (+123s, +33k tokens mean) concentrates in evals 0-1 where it runs profiling + spec authoring \u2014 that overhead buys the spec artifact and uniform report contract, which the assertions only partially price in. (6) Assertions that always pass regardless of skill (runs-to-completion, report-exists) are non-discriminating filler \u2014 replace with contract-level checks (machine-readable accounting completeness, duplicate policy, quarantine reprocessability) next iteration."
+}

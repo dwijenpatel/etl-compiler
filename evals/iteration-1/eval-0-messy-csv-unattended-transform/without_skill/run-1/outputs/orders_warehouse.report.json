@@ -1,0 +1,26 @@
+{
+  "input_file": "/home/claude/work/eval-inputs/orders_export.csv",
+  "output_file": "orders_warehouse.csv",
+  "run_at": "2026-07-17T23:57:53",
+  "rows_read": 9,
+  "rows_written": 6,
+  "dropped_rows": [
+    {
+      "line": 8,
+      "reason": "exact duplicate of line 6",
+      "raw": "10000005,Bob\u000bSmith,75,09/10/2026,Y,60601,fine"
+    },
+    {
+      "line": 9,
+      "reason": "blank line",
+      "raw": ""
+    },
+    {
+      "line": 10,
+      "reason": "summary/footer row",
+      "raw": "Total,,3222.56,,,,"
+    }
+  ],
+  "quarantined_rows": [],
+  "warnings": []
+}

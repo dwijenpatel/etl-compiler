@@ -1,0 +1,51 @@
+{
+  "file": "/home/claude/work/eval-inputs/target_orders.csv",
+  "encoding": "utf-8",
+  "delimiter": ",",
+  "columns": [
+    "order_id",
+    "customer_name",
+    "amount",
+    "order_date",
+    "is_active",
+    "postal_code",
+    "notes"
+  ],
+  "rows_profiled": 3,
+  "findings": [
+    {
+      "id": "NUL-01",
+      "class": "ask",
+      "message": "2 empty value(s) — null or empty string?",
+      "column": "notes",
+      "count": 2
+    },
+    {
+      "id": "TYP-06",
+      "class": "ask",
+      "message": "boolean-like vocabulary ['false', 'true'] — confirm truth mapping",
+      "column": "is_active"
+    },
+    {
+      "id": "TYP-07",
+      "class": "ask",
+      "message": "uniform-width, high-cardinality digits — identifier? keep as string",
+      "column": "order_id"
+    },
+    {
+      "id": "TYP-07",
+      "class": "ask",
+      "message": "leading zeros present — keep as string to avoid data loss",
+      "column": "postal_code",
+      "count": 1,
+      "evidence": [
+        "02134"
+      ]
+    }
+  ],
+  "summary": {
+    "ask": 4,
+    "fix": 0,
+    "row-error": 0
+  }
+}
