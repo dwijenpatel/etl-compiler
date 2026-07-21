@@ -1,11 +1,23 @@
-# The .etlspec.yaml Format (v0.2)
+# The .etlspec.yaml Format (v0.3)
 
 The spec is the single source of truth for a pipeline: every mapping, every policy decision, with provenance. It must be complete enough to regenerate the pipeline without re-profiling or re-interviewing.
 
-**v0.2 additions** (backward compatible; the compiler accepts 0.1 and 0.2): the optional
+**v0.2 additions** (backward compatible; the compiler accepts 0.1–0.3): the optional
 top-level `skip_rows:` section (STR-06 confirmed row exclusions, declarative), and two new
 transform ops — `repair_mojibake` (ENC-06, opt-in, report-counted) and `concat` (NUL-05
-SQL null propagation). Example `skip_rows`:
+SQL null propagation).
+
+**v0.3 addition — the `annotate` disposition (ERR-01 option c, evidence-backed).**
+`error_disposition` accepts `quarantine` (house default) | `fail-fast` | `annotate`.
+Under `annotate` (requires runtime ≥ 0.4.0), a **content** failure NULLs the failed field,
+the row **loads**, and a per-row ledger entry `{field, change: NULLED, reason: <taxonomy
+id>}` is written to `changes.jsonl` (shape adopted from Airbyte's `_airbyte_meta.changes`;
+reasons are taxonomy IDs) and aggregated in `summary.annotations_by_type`. Two failures
+never annotate: **structural** rows (STR-02 — no single field to repair) and **NUL-04**
+(a declared `nullable: false` target cannot be repaired by nulling) — both quarantine as
+usual. Annotated runs exit 2 ("investigate"), same as quarantining runs. An unknown
+disposition value is a compile-time SpecError and a runtime run-error — never a silent
+fallback. Example `skip_rows`:
 
 ```yaml
 skip_rows:                        # STR-06: confirmed non-data rows, matched on the RAW value

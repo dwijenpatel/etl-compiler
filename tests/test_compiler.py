@@ -311,6 +311,58 @@ class TestCompilerNewOps(unittest.TestCase):
         self.assertIn("split", str(ctx.exception))
 
 
+class TestAnnotateDisposition(unittest.TestCase):
+    def test_unknown_disposition_value_rejected_at_compile_time(self):
+        bad = MINI_SPEC.replace("error_disposition: {value: quarantine, provenance: default}",
+                                "error_disposition: {value: sideline, provenance: default}")
+        with self.assertRaises(cs.SpecError) as ctx:
+            cs.validate_spec(cs.load_etlspec(bad))
+        self.assertIn("error_disposition", str(ctx.exception))
+
+    def test_compiled_pipeline_wires_field_transforms_and_guards(self):
+        code = _compile_mini()
+        self.assertIn("FIELD_TRANSFORMS = [", code)
+        self.assertIn("field_transforms=FIELD_TRANSFORMS", code)
+        self.assertIn("row_guards=_row_guards", code)  # mini spec has skip_rows
+
+    def test_compiled_annotate_content_failure_ledgered(self):
+        import json as jsonmod
+        import shutil
+        import subprocess
+        import tempfile
+        # nullable integer column 'note' -> to_int; bad value must NULL+ledger.
+        spec_text = MINI_SPEC.replace(
+            "error_disposition: {value: quarantine, provenance: default}",
+            "error_disposition: {value: annotate, provenance: explicit}").replace(
+            "etlspec: 0.2", "etlspec: 0.3").replace(
+            "- {name: note, type: string, nullable: true}",
+            "- {name: note, type: integer, nullable: true}").replace(
+            "  - target: note\n    source: note\n    transforms:\n"
+            "      - {op: expr, python: \"(row['note'] or '').upper() if report else None\"}",
+            "  - target: note\n    source: note\n    transforms:\n      - {op: to_int}")
+        spec = cs.load_etlspec(spec_text)
+        code = cs.compile_spec(spec, spec_bytes=spec_text.encode(), spec_filename="t.yaml")
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with open(os.path.join(tmp, "p.py"), "w") as f:
+            f.write(code)
+        shutil.copy(os.path.join(REPO, "skill", "etl-generator", "assets",
+                                 "etl_runtime.py"), tmp)
+        with open(os.path.join(tmp, "in.csv"), "w", newline="") as f:
+            f.write("id,name,note\n1,a,7\n2,b,seven\n")
+        p = subprocess.run(["python3", "p.py", "in.csv", "--out-dir", "out"],
+                           cwd=tmp, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 2, p.stderr)
+        s = jsonmod.load(open(os.path.join(tmp, "out", "summary.json")))
+        self.assertEqual((s["rows_out"], s["rows_quarantined"], s["rows_annotated"]),
+                         (2, 0, 1))
+        self.assertEqual(s["annotations_by_type"], {"TYP-01:note": 1})
+        changes = [jsonmod.loads(l) for l in
+                   open(os.path.join(tmp, "out", "changes.jsonl"))]
+        self.assertEqual(changes[0]["changes"],
+                         [{"field": "note", "change": "NULLED", "reason": "TYP-01"}])
+
+
 class TestFullMessySpecEndToEnd(unittest.TestCase):
     """The iteration-3 gap, closed: the 17-trap orders_export file is now fully
     compiler-expressible (ENC-06 repair + STR-06 skip_rows as first-class ops)."""

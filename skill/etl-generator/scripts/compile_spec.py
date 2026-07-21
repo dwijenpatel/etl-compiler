@@ -30,7 +30,7 @@ import os
 import re
 import sys
 
-COMPILER_VERSION = "0.2.0"
+COMPILER_VERSION = "0.3.0"
 
 
 class SpecError(Exception):
@@ -431,7 +431,8 @@ OPS = {
 # split's miss-semantics have no taxonomy home yet (relates to the deferred
 # "embedded values" coverage candidate) — declined honestly, not half-shipped.
 UNSUPPORTED_OPS = {"split"}
-SUPPORTED_ETLSPEC = {"0.1", "0.2"}   # 0.2 adds skip_rows + repair_mojibake/concat ops
+SUPPORTED_ETLSPEC = {"0.1", "0.2", "0.3"}   # 0.2: skip_rows + repair_mojibake/concat; 0.3: annotate
+DISPOSITIONS = {"quarantine", "fail-fast", "annotate"}  # ERR-01 (runtime >= 0.4.0 for annotate)
 
 
 def _require(cond, msg):
@@ -467,6 +468,9 @@ def validate_spec(spec: dict):
                  f"policies.{key} must be {{value, provenance}}")
         _require(entry["provenance"] in PROVENANCES,
                  f"policies.{key}.provenance {entry['provenance']!r} not in {sorted(PROVENANCES)}")
+    _require(pol["error_disposition"]["value"] in DISPOSITIONS,
+             f"policies.error_disposition {pol['error_disposition']['value']!r} "
+             f"not in {sorted(DISPOSITIONS)} (ERR-01 decision space)")
 
     cols = spec["target"].get("columns")
     _require(isinstance(cols, list) and cols, "target.columns must be a non-empty list")
@@ -602,14 +606,14 @@ def _emit_mapping(m, col, helpers):
         expr = f"rt.not_null({expr}, {src!r})"  # NUL-04
 
     lines = [_mapping_comment(m)]
-    one = f"    out[{target!r}] = {expr}"
+    one = f"    return {expr}"
     if len(one) <= _MAX_LINE:
         lines.append(one)
     else:
         # deterministic stepwise form for long chains
         lines.append(f"    v = row[{src!r}]" if src is not None else "    v = None")
         lines.extend(f"    {s}" for s in _stepwise(m, col))
-        lines.append(f"    out[{target!r}] = v")
+        lines.append("    return v")
     return lines
 
 
@@ -695,14 +699,26 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
 
     mapping_by_target = {m["target"]: m for m in spec["mappings"]}
     helpers: list = []
-    body_lines = list(skip_guards)
-    for c in spec["target"]["columns"]:
+    field_fn_blocks = []
+    field_table = ["FIELD_TRANSFORMS = ["]
+    for idx, c in enumerate(spec["target"]["columns"]):
         m = mapping_by_target.get(c["name"])
+        fn = f"_t_{idx}"
         if m is None:
-            body_lines.append(f"    # {c['name']} — unfilled (declared in spec.unmapped)")
-            body_lines.append(f"    out[{c['name']!r}] = None")
+            field_fn_blocks += [f"def {fn}(row, report):",
+                                f"    # {c['name']} — unfilled (declared in spec.unmapped)",
+                                "    return None", "", ""]
         else:
-            body_lines.extend(_emit_mapping(m, c, helpers))
+            field_fn_blocks += [f"def {fn}(row, report):",
+                                *_emit_mapping(m, c, helpers), "", ""]
+        field_table.append(f"    ({c['name']!r}, {fn}),")
+    field_table.append("]")
+
+    guard_fn = []
+    if skip_guards:
+        guard_fn = ["def _row_guards(row, report):",
+                    '    """Confirmed row exclusions (spec skip_rows) — counted, never silent."""',
+                    *skip_guards, "", ""]
 
     config_lines = ["CONFIG = {"]
     for k, v in config.items():
@@ -740,13 +756,13 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
         "",
         "",
         *(helpers + [""] if helpers else []),
-        "def transform_row(row, report):",
-        '    """Map one cleaned input row -> output row. Values arrive text-cleaned',
-        "    and null-resolved per CONFIG policies (ENC-03/04/05, NUL-01/02/03),",
-        '    applied and counted by the runtime."""',
-        "    out = {}",
-        *body_lines,
-        "    return out",
+        "# Per-field transforms: values arrive text-cleaned and null-resolved per",
+        "# CONFIG policies (ENC-03/04/05, NUL-01/02/03), applied and counted by the",
+        "# runtime. Field granularity lets the annotate disposition (ERR-01 c) NULL",
+        "# and ledger a single failed field while the rest of the row survives.",
+        *guard_fn,
+        *field_fn_blocks,
+        *field_table,
         "",
         "",
         "def main():",
@@ -755,7 +771,8 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
         '    p.add_argument("--out-dir", default="./etl_out")',
         "    args = p.parse_args()",
         "    result = rt.run_pipeline(input_path=args.input, out_dir=args.out_dir,",
-        "                             config=CONFIG, transform_row=transform_row)",
+        "                             config=CONFIG, field_transforms=FIELD_TRANSFORMS,",
+        f"                             row_guards={'_row_guards' if skip_guards else 'None'})",
         "    raise SystemExit(result.exit_code)",
         "",
         "",

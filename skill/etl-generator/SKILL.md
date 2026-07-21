@@ -4,7 +4,7 @@ description: Interactive ETL code generator built on a failure-mode taxonomy. Us
 compatibility: Requires Python 3 (standard library only — no third-party packages) and the ability to run bundled scripts. Harness-agnostic; conforms to the Agent Skills open standard.
 metadata:
   taxonomy-version: "0.2"
-  runtime-version: "0.3.0"
+  runtime-version: "0.4.0"
 ---
 
 # ETL Generator

@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-RUNTIME_VERSION = "0.3.0"
+RUNTIME_VERSION = "0.4.0"
 TAXONOMY_VERSION = "0.2"
 ISO8601_DATE = "%Y-%m-%d"
 ISO8601_DATETIME = "%Y-%m-%dT%H:%M:%S%z"
@@ -74,6 +74,7 @@ class RunReport:
     quarantined: list = field(default_factory=list)     # raw input rows (lists)
     warnings: Counter = field(default_factory=Counter)  # (column, code) -> count
     duplicates: list = field(default_factory=list)      # STR-05: exact-duplicate sightings
+    annotations: list = field(default_factory=list)     # ERR-01(c): per-row change ledgers
     run_error: dict | None = None
 
     def warn(self, column: str, code: str, n: int = 1):
@@ -81,15 +82,38 @@ class RunReport:
         if n:
             self.warnings[(column or "<row>", code)] += n
 
-    def add_row_error(self, row_number: int, raw_row: list, err: RowError):
+    def add_row_error(self, row_number: int, raw_row: list, err: RowError,
+                      expected_columns: list | None = None):
+        # Record shape adopts DuckDB's reject_errors design (ERR-03 i): stable
+        # error type + column index + the verbatim raw line, for reprocessing.
+        column_idx = None
+        if expected_columns and err.column in expected_columns:
+            column_idx = expected_columns.index(err.column)
+        buf = io.StringIO()
+        csv.writer(buf).writerow(raw_row)
         self.row_errors.append({
             "row_number": row_number,
             "column": err.column,
+            "column_idx": column_idx,
             "error_code": err.code,
             "offending_value": None if err.value is None else str(err.value)[:500],
             "message": err.message,
+            "csv_line": buf.getvalue().rstrip("\r\n"),
         })
         self.quarantined.append((row_number, raw_row))
+
+    def annotate_row(self, row_number: int, changes: list):
+        """ERR-01 option (c): ledger for a row that loaded with repaired fields.
+        Shape adopted from Airbyte's `_airbyte_meta.changes` ({field, change,
+        reason}); reasons are taxonomy IDs. Counted, never silent (ERR-04)."""
+        self.annotations.append({"row_number": row_number, "changes": changes})
+
+    def annotation_aggregates(self) -> dict:
+        agg: Counter = Counter()
+        for a in self.annotations:
+            for c in a["changes"]:
+                agg[(c["reason"], c["field"])] += 1
+        return {f"{code}:{col}": n for (code, col), n in sorted(agg.items())}
 
     # -- aggregates (ERR-03 ii) --
     def error_aggregates(self) -> dict:
@@ -110,6 +134,8 @@ class RunReport:
             "distinct_error_types": len(self.error_aggregates()),
             "errors_by_type": self.error_aggregates(),
             "warnings_by_type": self.warning_aggregates(),
+            "rows_annotated": len(self.annotations),
+            "annotations_by_type": self.annotation_aggregates(),
             "exact_duplicate_rows": self.duplicates,
             "run_error": self.run_error,
         }
@@ -446,11 +472,20 @@ def read_text_with_policy(path: str, encoding: str, report: RunReport) -> str:
 # Pipeline driver (STR-02, KEY-02/03, ERR-01/02/05/06)
 # ---------------------------------------------------------------------------
 
-def run_pipeline(*, input_path: str, out_dir: str, config: dict, transform_row) -> RunResult:
+DISPOSITIONS = ("quarantine", "fail-fast", "annotate")  # ERR-01 decision space
+
+
+def run_pipeline(*, input_path: str, out_dir: str, config: dict, transform_row=None,
+                 field_transforms=None, row_guards=None) -> RunResult:
+    """ERR-01 dispositions: `quarantine` (default) and `fail-fast` use
+    `transform_row` (built from `field_transforms` if absent). `annotate`
+    REQUIRES `field_transforms` — per-field granularity is what lets one bad
+    field be NULLed-and-ledgered while the rest of the row survives."""
     report = RunReport()
     os.makedirs(out_dir, exist_ok=True)
     try:
-        return _run_pipeline(input_path, out_dir, config, transform_row, report)
+        return _run_pipeline(input_path, out_dir, config, transform_row,
+                             field_transforms, row_guards, report)
     except RunError as e:
         # ERR-05: a failed run leaves no partial output — but always the reports.
         report.run_error = {"code": e.code, "message": e.message}
@@ -459,10 +494,27 @@ def run_pipeline(*, input_path: str, out_dir: str, config: dict, transform_row) 
 
 
 def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
-                  report: RunReport) -> RunResult:
+                  field_transforms, row_guards, report: RunReport) -> RunResult:
     pol = config.get("policies", {})
     sentinels_by_col = {c: tuple(v) for c, v in pol.get("sentinels", {}).items()}
     disposition = pol.get("error_disposition", "quarantine")  # ERR-01
+    if disposition not in DISPOSITIONS:
+        # Never silently fall back — an unknown disposition means the spec and
+        # this runtime disagree about semantics.
+        raise RunError("ERR-01", f"unknown error_disposition {disposition!r} "
+                                 f"(this runtime supports {DISPOSITIONS})")
+    if disposition == "annotate" and not field_transforms:
+        raise RunError("ERR-01", "annotate disposition requires field_transforms "
+                                 "(per-field granularity); regenerate the pipeline "
+                                 "with compiler >= 0.3.0")
+    if transform_row is None:
+        if not field_transforms:
+            raise RunError("ERR-01", "run_pipeline needs transform_row or field_transforms")
+
+        def transform_row(row, rep, _fts=field_transforms, _rg=row_guards):
+            if _rg:
+                _rg(row, rep)
+            return {t: fn(row, rep) for t, fn in _fts}
     budget = pol.get("error_budget", {"percent": 5, "min_rows": 100})  # ERR-02
 
     text = read_text_with_policy(input_path, config.get("encoding", "utf-8"), report)
@@ -516,7 +568,13 @@ def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
                                           trim=pol.get("trim_whitespace", True),
                                           empty_is_null=pol.get("empty_string_is_null", True),
                                           sentinels=sentinels_by_col.get(cname, ()))
-            out = transform_row(row, report)
+            if disposition == "annotate":
+                out, changes = _transform_annotating(row, report, field_transforms,
+                                                     row_guards)
+                if changes:
+                    report.annotate_row(i, changes)
+            else:
+                out = transform_row(row, report)
             out_rows.append([_render(out.get(c)) for c in out_columns])
         except SkipRow as skip:
             report.warn("<row>", skip.code)
@@ -526,7 +584,7 @@ def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
                                     "message": f"fail-fast on row {i}: {err.message}"}
                 _write_reports(out_dir, report, config, input_path)
                 return RunResult(1, report, out_dir)
-            report.add_row_error(i, raw, err)
+            report.add_row_error(i, raw, err, expected)
             # ERR-02: row tolerance must not mask systemic failure.
             if (len(report.quarantined) >= budget.get("min_rows", 100)
                     and report.rows_in
@@ -543,7 +601,28 @@ def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
     # ERR-05: atomic output — write to temp, promote on success only.
     _atomic_write_csv(os.path.join(out_dir, "output.csv"), out_columns, out_rows)
     _write_reports(out_dir, report, config, input_path)
-    return RunResult(2 if report.quarantined else 0, report, out_dir)
+    # exit 2 = "investigate": quarantined rows OR annotated (repaired) rows.
+    return RunResult(2 if (report.quarantined or report.annotations) else 0,
+                     report, out_dir)
+
+
+def _transform_annotating(row: dict, report: RunReport, field_transforms, row_guards):
+    """ERR-01 option (c): per-field transform. A content RowError NULLs that
+    field and ledgers {field, change: NULLED, reason: <taxonomy id>}; the row
+    loads. NUL-04 (declared non-nullable) re-raises — a NOT NULL target cannot
+    be repaired by nulling, so the whole row quarantines."""
+    if row_guards:
+        row_guards(row, report)  # SkipRow propagates to the driver
+    out, changes = {}, []
+    for target, fn in field_transforms:
+        try:
+            out[target] = fn(row, report)
+        except RowError as err:
+            if err.code == "NUL-04":
+                raise
+            out[target] = None
+            changes.append({"field": target, "change": "NULLED", "reason": err.code})
+    return out, changes
 
 
 def _render(v):
@@ -577,6 +656,10 @@ def _write_reports(out_dir: str, report: RunReport, config: dict, input_path: st
     with open(os.path.join(out_dir, "errors.jsonl"), "w", encoding="utf-8") as f:
         for e in report.row_errors:
             f.write(json.dumps(e) + "\n")
+    if report.annotations:  # ERR-01(c): the per-row change ledger
+        with open(os.path.join(out_dir, "changes.jsonl"), "w", encoding="utf-8") as f:
+            for a in report.annotations:
+                f.write(json.dumps(a) + "\n")
     if report.quarantined:
         with open(os.path.join(out_dir, "quarantine.csv"), "w", newline="",
                   encoding="utf-8") as f:

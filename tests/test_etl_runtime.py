@@ -403,6 +403,88 @@ class TestRunPipeline(unittest.TestCase):
                          + summary["rows_quarantined"] + 1)
 
     # ------------------------------------------------------------------
+    # ERR-01 option (c): annotate disposition (Airbyte change-ledger shape,
+    # taxonomy IDs as reasons). Content failures annotate; structural (STR-02)
+    # and declared-non-nullable (NUL-04) failures still quarantine.
+    # ------------------------------------------------------------------
+
+    def _annotate_run(self, csv_text, fields=None):
+        path = self._input(csv_text)
+        cfg = self._config(expected_columns=["id", "n"], output_columns=["id", "n"],
+                          policies={"error_disposition": "annotate"})
+
+        def t_id(row, report):
+            return rt.not_null(row["id"], "id")
+
+        def t_n(row, report):
+            return rt.to_int(row["n"], "n")
+
+        return rt.run_pipeline(input_path=path, out_dir=self.out_dir, config=cfg,
+                               field_transforms=fields or [("id", t_id), ("n", t_n)])
+
+    def test_annotate_content_failure_loads_row_nulls_field_ledgers_change(self):
+        res = self._annotate_run("id,n\n1,7\n2,abc\n")
+        self.assertEqual(res.exit_code, 2)  # loaded, but investigate
+        summary = self._read_json("summary.json")
+        self.assertEqual(summary["rows_out"], 2)          # row LOADED
+        self.assertEqual(summary["rows_quarantined"], 0)
+        self.assertEqual(summary["rows_annotated"], 1)
+        self.assertEqual(summary["annotations_by_type"], {"TYP-01:n": 1})
+        changes = [json.loads(l) for l in
+                   open(os.path.join(self.out_dir, "changes.jsonl"), encoding="utf-8")]
+        self.assertEqual(changes, [{"row_number": 3, "changes": [
+            {"field": "n", "change": "NULLED", "reason": "TYP-01"}]}])
+        with open(os.path.join(self.out_dir, "output.csv"), encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        self.assertEqual(rows[2], ["2", ""])              # field nulled in output
+
+    def test_annotate_structural_failure_still_quarantines(self):
+        res = self._annotate_run("id,n\n1,7\n2\n")        # ragged row
+        summary = self._read_json("summary.json")
+        self.assertEqual(summary["rows_out"], 1)
+        self.assertEqual(summary["rows_quarantined"], 1)  # STR-02 not annotatable
+        self.assertEqual(summary["errors_by_type"], {"STR-02:<row>": 1})
+        self.assertEqual(res.exit_code, 2)
+
+    def test_annotate_non_nullable_violation_still_quarantines(self):
+        res = self._annotate_run("id,n\n,7\n")            # empty NOT NULL id
+        summary = self._read_json("summary.json")
+        self.assertEqual(summary["rows_out"], 0)
+        self.assertEqual(summary["rows_quarantined"], 1)  # NUL-04 can't be nulled
+        self.assertEqual(summary["errors_by_type"], {"NUL-04:id": 1})
+
+    def test_annotate_without_field_transforms_fails_loud(self):
+        path = self._input("id,name\n1,a\n")
+        cfg = self._config(policies={"error_disposition": "annotate"})
+        res = rt.run_pipeline(input_path=path, out_dir=self.out_dir, config=cfg,
+                              transform_row=_passthrough_transform(["id", "name"]))
+        self.assertEqual(res.exit_code, 1)
+        self.assertEqual(res.report.run_error["code"], "ERR-01")
+
+    def test_unknown_disposition_fails_loud_never_silently_falls_back(self):
+        path = self._input("id,name\n1,a\n")
+        cfg = self._config(policies={"error_disposition": "annotate-and-pray"})
+        res = rt.run_pipeline(input_path=path, out_dir=self.out_dir, config=cfg,
+                              transform_row=_passthrough_transform(["id", "name"]))
+        self.assertEqual(res.exit_code, 1)
+        self.assertEqual(res.report.run_error["code"], "ERR-01")
+
+    # ------------------------------------------------------------------
+    # ERR-03(i): per-row error records adopt DuckDB reject_errors fields
+    # ------------------------------------------------------------------
+
+    def test_error_records_carry_column_idx_and_csv_line(self):
+        path = self._input("id,name\n1,a\n2\n")
+        rt.run_pipeline(input_path=path, out_dir=self.out_dir,
+                        config=self._config(),
+                        transform_row=_passthrough_transform(["id", "name"]))
+        rec = [json.loads(l) for l in
+               open(os.path.join(self.out_dir, "errors.jsonl"), encoding="utf-8")][0]
+        self.assertEqual(rec["csv_line"], "2")            # raw line, CSV-rendered
+        self.assertIn("column_idx", rec)                  # None for row-level errors
+        self.assertIsNone(rec["column_idx"])
+
+    # ------------------------------------------------------------------
     # ERR-06: manifest carries spec provenance
     # ------------------------------------------------------------------
 
