@@ -173,6 +173,52 @@ class TestCoercers(unittest.TestCase):
         self.assertIsNone(rt.check_range(None, "c"))
 
 
+class TestEnc06RepairMojibake(unittest.TestCase):
+    """ENC-06 repair — upstreamed from the iteration-3 agent candidate. Opt-in,
+    signature-gated, never lossy."""
+
+    def test_repairs_double_encoded_utf8_and_counts(self):
+        report = rt.RunReport()
+        self.assertEqual(rt.repair_mojibake("JosÃ© GarcÃ­a", "customer", report),
+                         "José García")
+        self.assertEqual(report.warnings[("customer", "ENC-06")], 1)
+
+    def test_leaves_clean_accented_text_untouched_uncounted(self):
+        report = rt.RunReport()
+        for v in ("José", "Réné", "plain"):
+            self.assertEqual(rt.repair_mojibake(v, "customer", report), v)
+        self.assertEqual(sum(report.warnings.values()), 0)
+
+    def test_never_lossy_on_unrepairable_signature(self):
+        # carries a signature char but does not round-trip: return original
+        v = "Ã" + "☃"  # snowman can't encode latin-1
+        self.assertEqual(rt.repair_mojibake(v, "c", None), v)
+
+    def test_none_passes_through(self):
+        self.assertIsNone(rt.repair_mojibake(None, "c", None))
+
+
+class TestStr06SkipIf(unittest.TestCase):
+    def test_true_condition_raises_skiprow_with_code_and_reason(self):
+        with self.assertRaises(rt.SkipRow) as ctx:
+            rt.skip_if(None, True, code="STR-06", reason="footer/total row")
+        self.assertEqual(ctx.exception.code, "STR-06")
+        self.assertEqual(ctx.exception.reason, "footer/total row")
+
+    def test_false_condition_returns_value_untouched(self):
+        self.assertEqual(rt.skip_if("keep me", False), "keep me")
+
+
+class TestConcat(unittest.TestCase):
+    def test_joins_values_with_sep(self):
+        self.assertEqual(rt.concat(["Ada", "Lovelace"], "full_name", sep=" "),
+                         "Ada Lovelace")
+
+    def test_sql_null_propagation_any_none_yields_none(self):
+        # NUL-05 default: SQL semantics — any null operand yields null.
+        self.assertIsNone(rt.concat(["Ada", None], "full_name", sep=" "))
+
+
 class TestReadTextWithPolicy(unittest.TestCase):
     def _write(self, data: bytes) -> str:
         fd, path = tempfile.mkstemp()

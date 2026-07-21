@@ -1,6 +1,18 @@
-# The .etlspec.yaml Format (v0.1)
+# The .etlspec.yaml Format (v0.2)
 
 The spec is the single source of truth for a pipeline: every mapping, every policy decision, with provenance. It must be complete enough to regenerate the pipeline without re-profiling or re-interviewing.
+
+**v0.2 additions** (backward compatible; the compiler accepts 0.1 and 0.2): the optional
+top-level `skip_rows:` section (STR-06 confirmed row exclusions, declarative), and two new
+transform ops — `repair_mojibake` (ENC-06, opt-in, report-counted) and `concat` (NUL-05
+SQL null propagation). Example `skip_rows`:
+
+```yaml
+skip_rows:                        # STR-06: confirmed non-data rows, matched on the RAW value
+  - {column: order_id, pattern: '^\D', id: STR-06, reason: "footer/total row", provenance: detected-confirmed}
+```
+
+A complete worked v0.2 example (all 17 trap classes of the demo file): `evals/inputs/orders_export.etlspec.yaml` in the repo.
 
 ## Provenance values
 
@@ -96,6 +108,6 @@ review_required: []               # IDs of unconfirmed decisions (unattended mod
 
 1. **Completeness:** every policy key above appears in every spec, even when defaulted. A reader must never wonder "what does this pipeline do about X?"
 2. **Sentinels are per-column** (NUL-03) and always carry evidence. Never spec a dataset-wide sentinel list.
-3. **Transforms are ops from the runtime's vocabulary** (`to_decimal`, `to_date`, `to_datetime`, `to_bool`, `to_int`, `concat`, `split`, `constant`, `format_datetime`, custom expressions as `{op: expr, python: "..."}` — custom expressions are a visible escape hatch, use sparingly).
+3. **Transforms are ops from the runtime's vocabulary** (`to_decimal`, `to_date`, `to_datetime`, `to_bool`, `to_int`, `repair_mojibake`, `concat` `{sources, sep}`, `constant`, `format_datetime`, custom expressions as `{op: expr, python: "..."}` — expressions may reference `row` and `report`, and are a visible escape hatch; use sparingly). `split` is declared in the vocabulary but the compiler currently declines it (its miss-semantics have no taxonomy home yet — use `expr`).
 4. **Order matters:** transforms apply left to right, after text cleaning and null resolution (which the runtime applies per policy before any transform runs).
 5. **A null reaching a `nullable: false` target column is NUL-04** — row-error, handled by the runtime; do not add explicit checks per mapping.

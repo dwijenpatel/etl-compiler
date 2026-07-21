@@ -1,0 +1,78 @@
+etlspec: 0.2
+name: orders_export
+taxonomy_version: 0.2
+source:
+  format: csv
+  encoding: {value: utf-8, provenance: detected-confirmed}   # ENC-01; BOM stripped per ENC-02
+  dialect: {delimiter: ",", quotechar: '"'}
+  header: present                  # STR-04: names carry whitespace; trimmed by runtime
+  expected_columns: [order_id, customer, amt, order_date, active, zip, notes]
+target:
+  columns:
+    - {name: order_id, type: string, nullable: false}
+    - {name: customer_name, type: string, nullable: false}
+    - {name: amount, type: decimal, scale: 2, nullable: true}
+    - {name: order_date, type: date, nullable: true}
+    - {name: is_active, type: boolean, nullable: true}
+    - {name: postal_code, type: string, nullable: true, max_length: 10}
+    - {name: notes, type: string, nullable: true}
+policies:
+  unicode_normalization: {value: NFC, provenance: default}          # ENC-03
+  strip_control_chars: {value: true, provenance: default}           # ENC-04
+  normalize_unicode_whitespace: {value: true, provenance: default}  # ENC-05
+  trim_whitespace: {value: true, provenance: default}               # NUL-02/TYP-10
+  empty_string_is_null: {value: true, provenance: default}          # NUL-01
+  null_propagation: {value: sql, provenance: default}               # NUL-05
+  datetime_rendering: {value: iso8601, provenance: default}         # TYP-05
+  error_disposition: {value: quarantine, provenance: default}       # ERR-01
+  error_budget: {value: {percent: 50, min_rows: 3}, provenance: explicit}  # ERR-02 (tiny sample)
+  duplicate_rows: {value: keep, provenance: default}                # STR-05: keep-and-report
+skip_rows:
+  # STR-06: footer/total rows — order_id is non-numeric only on report footers.
+  - {column: order_id, pattern: '^\D', id: STR-06, reason: "footer/total row", provenance: detected-confirmed}
+mappings:
+  - target: order_id
+    source: order_id
+    transforms: []
+    decisions:
+      - {id: TYP-07, choice: string, provenance: detected-confirmed, evidence: "uniform 8-digit values"}
+  - target: customer_name
+    source: customer
+    transforms:
+      - {op: repair_mojibake}
+    decisions:
+      - {id: ENC-06, choice: repair, provenance: detected-confirmed,
+         evidence: "target sample shows JosÃ© GarcÃ­a repaired to José García; repair is signature-gated and never lossy"}
+  - target: amount
+    source: amt
+    transforms:
+      - {op: to_decimal, thousands_sep: ",", currency: true, accounting_negative: true}
+    decisions:
+      - {id: TYP-01, choice: "strip $ and commas; (n) = negative", provenance: detected-confirmed,
+         evidence: "$1,234.56 and (500) patterns in sample"}
+  - target: order_date
+    source: order_date
+    transforms:
+      - {op: to_date, formats: ["%m/%d/%Y"]}
+    decisions:
+      - {id: TYP-03, choice: MDY, provenance: detected-confirmed,
+         evidence: "all sample dates ambiguous; target sample disambiguates (01/02/2026 -> 2026-01-02)"}
+  - target: is_active
+    source: active
+    transforms:
+      - {op: to_bool, mapping: {Y: true, N: false}}
+    decisions:
+      - {id: TYP-06, choice: "Y/N vocabulary", provenance: detected-confirmed}
+  - target: postal_code
+    source: zip
+    transforms: []
+    decisions:
+      - {id: TYP-07, choice: string, provenance: detected-confirmed, evidence: "leading zeros present (02134)"}
+  - target: notes
+    source: notes
+    transforms: []
+    sentinels: {values: ["N/A"], provenance: detected-confirmed}     # NUL-03
+unmapped:
+  unused_source_columns: []
+  unfilled_target_columns: []
+review_required: []

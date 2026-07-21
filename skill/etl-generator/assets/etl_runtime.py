@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-RUNTIME_VERSION = "0.2.0"
+RUNTIME_VERSION = "0.3.0"
 TAXONOMY_VERSION = "0.2"
 ISO8601_DATE = "%Y-%m-%d"
 ISO8601_DATETIME = "%Y-%m-%dT%H:%M:%S%z"
@@ -332,6 +332,58 @@ def to_bool(value, column: str, *, mapping, report: RunReport | None = None) -> 
             return mapped
     raise RowError("TYP-06", column, value,
                    f"not in confirmed boolean vocabulary {sorted(map(str, mapping))}")
+
+
+# ENC-06 mojibake signatures: characters that only appear when UTF-8 bytes were
+# mis-decoded as Latin-1/CP1252 (Ã, Â, the â€ family, Cyrillic-range Ð/Ñ).
+_MOJIBAKE_SIGNATURES = ("Ã", "Â", "â€", "Ð", "Ñ")
+
+
+def repair_mojibake(value, column: str, report: RunReport | None = None):
+    """ENC-06: repair double-encoded UTF-8 baked into data (`JosÃ©` -> `José`).
+
+    Heuristic and OPT-IN — the taxonomy default is pass-through-and-flag; a spec
+    enables this only as a confirmed (or unattended-`unconfirmed`) decision.
+    Safety guarantees so that applying it can never corrupt good data:
+      * only strings carrying a mojibake signature are touched;
+      * repair is the strict Latin-1 -> UTF-8 round-trip (no lossy error modes);
+      * on ANY failure, or if the round-trip yields U+FFFD, the ORIGINAL value
+        is returned unchanged. Repair must never lose data.
+    Counts one ENC-06 warning per repaired value (ERR-04).
+    Upstreamed from an eval-iteration-3 agent run (additive; behavior preserved).
+    """
+    if value is None or not isinstance(value, str):
+        return value
+    if not any(sig in value for sig in _MOJIBAKE_SIGNATURES):
+        return value
+    try:
+        repaired = value.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return value  # not a clean Latin-1 -> UTF-8 round-trip; leave untouched
+    if repaired == value or "�" in repaired:
+        return value
+    if report is not None:  # ERR-04: auto-fixes are counted
+        report.warn(column, "ENC-06")
+    return repaired
+
+
+def skip_if(value, condition, code: str = "STR-06", reason: str = ""):
+    """STR-06 helper: exclude the current row when `condition` is true, else
+    return `value` untouched. Usable both as a statement (value=None) in
+    compiler-emitted skip guards and inside a spec `expr` transform (where a
+    `raise` cannot appear in the expression body). The SkipRow handler counts
+    the exclusion as a warning under `code` — never silent."""
+    if condition:
+        raise SkipRow(code, reason)
+    return value
+
+
+def concat(values, column: str, *, sep: str = "") -> str | None:
+    """Join multiple source values. NUL-05 policy: SQL semantics — any null
+    operand yields null (overrides are per-mapping, visible in the spec)."""
+    if any(v is None for v in values):
+        return None
+    return sep.join(str(v) for v in values)
 
 
 def check_length(value, column: str, *, max_length) -> str | None:

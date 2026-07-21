@@ -95,6 +95,9 @@ Coercers (all pass `None` through; all raise `rt.RowError` with a taxonomy code 
 - `to_date(v, col, *, formats)` / `to_datetime(v, col, *, formats, assume_tz=None, to_utc=True)` — TYP-03/04
 - `format_datetime(v, col, *, fmt=ISO8601)` — TYP-05
 - `to_bool(v, col, *, mapping, report=None)` — TYP-06; pass the transform's report arg so case-insensitive acceptances are counted (TYP-10, per ERR-04)
+- `repair_mojibake(v, col, report=None)` — ENC-06, opt-in; signature-gated Latin-1→UTF-8 round-trip, never lossy, counted
+- `skip_if(value, condition, code="STR-06", reason="")` — raises SkipRow when condition holds (counted); the compiler emits it for declarative `skip_rows` rules
+- `concat(values, col, *, sep="")` — NUL-05 SQL null propagation (any None → None)
 - `check_length(v, col, *, max_length)` — TYP-11
 - `not_null(v, col)` — NUL-04
 - `check_range(v, col, *, min=None, max=None)` — TYP-09

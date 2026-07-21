@@ -4,7 +4,7 @@ description: Interactive ETL code generator built on a failure-mode taxonomy. Us
 compatibility: Requires Python 3 (standard library only — no third-party packages) and the ability to run bundled scripts. Harness-agnostic; conforms to the Agent Skills open standard.
 metadata:
   taxonomy-version: "0.2"
-  runtime-version: "0.2.0"
+  runtime-version: "0.3.0"
 ---
 
 # ETL Generator
@@ -55,7 +55,7 @@ Map input columns to output columns: direct copies, renames, casts, reformatting
 
 ### Step 5 — Write the spec
 
-Write `<name>.etlspec.yaml` following `references/spec-format.md` exactly. The spec must contain a decision (with provenance) for every policy the taxonomy defines — including defaulted ones. Show it to the user for approval. The spec, not the conversation, is the source of truth; if the user later wants changes, edit the spec and regenerate.
+Write `<name>.etlspec.yaml` following `references/spec-format.md` exactly, where `<name>` is the spec's `name` field — snake_case, derived from the input filename's stem unless the user supplies a name (e.g. `orders_export.csv` → `orders_export.etlspec.yaml`, later `orders_export_pipeline.py`). Consistent naming keeps independent regenerations byte-comparable. The spec must contain a decision (with provenance) for every policy the taxonomy defines — including defaulted ones. Show it to the user for approval. The spec, not the conversation, is the source of truth; if the user later wants changes, edit the spec and regenerate.
 
 ### Step 6 — Generate the pipeline (compiler-first; do not hand-write code)
 

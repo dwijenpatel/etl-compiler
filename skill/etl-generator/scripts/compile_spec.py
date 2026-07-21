@@ -30,7 +30,7 @@ import os
 import re
 import sys
 
-COMPILER_VERSION = "0.1.0"
+COMPILER_VERSION = "0.2.0"
 
 
 class SpecError(Exception):
@@ -423,10 +423,15 @@ OPS = {
     "to_datetime": ["formats", "assume_tz", "to_utc"],
     "to_bool": ["mapping"],
     "format_datetime": ["fmt"],
+    "repair_mojibake": [],          # ENC-06: opt-in, report-counted
+    "concat": ["sources", "sep"],   # NUL-05 sql null propagation in runtime
     "constant": ["value"],
     "expr": ["python"],
 }
-UNSUPPORTED_OPS = {"concat", "split"}  # spec vocabulary; compiler support pending
+# split's miss-semantics have no taxonomy home yet (relates to the deferred
+# "embedded values" coverage candidate) — declined honestly, not half-shipped.
+UNSUPPORTED_OPS = {"split"}
+SUPPORTED_ETLSPEC = {"0.1", "0.2"}   # 0.2 adds skip_rows + repair_mojibake/concat ops
 
 
 def _require(cond, msg):
@@ -438,6 +443,9 @@ def validate_spec(spec: dict):
     for key in ("etlspec", "name", "taxonomy_version", "source", "target",
                 "policies", "mappings"):
         _require(key in spec, f"spec is missing required top-level key {key!r}")
+    _require(str(spec["etlspec"]) in SUPPORTED_ETLSPEC,
+             f"etlspec format {spec['etlspec']!r} not supported "
+             f"(known: {sorted(SUPPORTED_ETLSPEC)})")
     _require(re.match(r"^[a-z][a-z0-9_]*$", str(spec["name"])),
              f"spec name {spec['name']!r} must be snake_case")
 
@@ -472,6 +480,18 @@ def validate_spec(spec: dict):
         col_by_name[c["name"]] = c
 
     expected = set(src["expected_columns"])
+    for rule in spec.get("skip_rows") or []:
+        _require(isinstance(rule, dict) and "column" in rule and "pattern" in rule,
+                 f"skip_rows rule {rule!r} needs column + pattern")
+        _require(rule["column"] in expected,
+                 f"skip_rows column {rule['column']!r} not in expected_columns")
+        _require(rule.get("provenance") in PROVENANCES,
+                 f"skip_rows rule for {rule['column']!r} needs a provenance")
+        try:
+            re.compile(rule["pattern"])
+        except re.error as e:
+            _require(False, f"skip_rows pattern {rule['pattern']!r} is not a valid regex: {e}")
+
     mapped = set()
     for m in spec["mappings"]:
         _require("target" in m, f"mapping {m!r} missing target")
@@ -480,11 +500,18 @@ def validate_spec(spec: dict):
         _require(t not in mapped, f"target column {t!r} mapped twice")
         mapped.add(t)
         transforms = m.get("transforms") or []
-        is_constant = len(transforms) == 1 and transforms[0].get("op") == "constant"
-        if not is_constant:
+        sourceless = len(transforms) == 1 and transforms[0].get("op") in ("constant", "concat")
+        if not sourceless:
             _require("source" in m, f"mapping for {t!r} missing source")
             _require(m["source"] in expected,
                      f"mapping for {t!r}: source {m['source']!r} not in expected_columns")
+        for tr in transforms:
+            if tr.get("op") == "concat":
+                _require(isinstance(tr.get("sources"), list) and tr["sources"],
+                         f"concat for {t!r} needs a non-empty sources list")
+                for s in tr["sources"]:
+                    _require(s in expected,
+                             f"concat for {t!r}: source {s!r} not in expected_columns")
         for tr in transforms:
             op = tr.get("op")
             _require(op not in UNSUPPORTED_OPS,
@@ -548,11 +575,17 @@ def _emit_mapping(m, col, helpers):
         elif op == "expr":
             fn = f"_expr_{target}"
             helpers.append(
-                f"def {fn}(row):\n"
+                f"def {fn}(row, report):\n"
                 f"    # CUSTOM EXPRESSION from the spec (op: expr) — the only\n"
                 f"    # non-runtime logic permitted in a generated pipeline.\n"
+                f"    # `report` is available for ERR-04 counting (rt.RunReport).\n"
                 f"    return {tr['python']}\n")
-            expr = f"{fn}(row)"
+            expr = f"{fn}(row, report)"
+        elif op == "concat":
+            srcs = ", ".join(f"row[{s!r}]" for s in tr["sources"])
+            expr = f"rt.concat([{srcs}], {target!r}, sep={tr.get('sep', '')!r})"
+        elif op == "repair_mojibake":
+            expr = f"rt.repair_mojibake({expr}, {src!r}, report=report)"
         elif op == "to_decimal":
             tr = dict(tr)
             if "scale" not in tr and col.get("type") == "decimal" and "scale" in col:
@@ -588,7 +621,12 @@ def _stepwise(m, col):
         if op == "constant":
             steps.append(f"v = {tr['value']!r}")
         elif op == "expr":
-            steps.append(f"v = _expr_{m['target']}(row)")
+            steps.append(f"v = _expr_{m['target']}(row, report)")
+        elif op == "concat":
+            srcs = ", ".join(f"row[{s!r}]" for s in tr["sources"])
+            steps.append(f"v = rt.concat([{srcs}], {m['target']!r}, sep={tr.get('sep', '')!r})")
+        elif op == "repair_mojibake":
+            steps.append(f"v = rt.repair_mojibake(v, {src!r}, report=report)")
         elif op == "to_decimal":
             tr = dict(tr)
             if "scale" not in tr and col.get("type") == "decimal" and "scale" in col:
@@ -642,9 +680,22 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
         review_block = ("\nREVIEW REQUIRED — unconfirmed decisions (unattended mode):\n"
                         + "".join(f"  - {r!r}\n" for r in review))
 
+    skip_rules = spec.get("skip_rows") or []
+    skip_consts = []
+    skip_guards = []
+    for idx, rule in enumerate(skip_rules):
+        const = f"_SKIP{idx}_RE"
+        skip_consts.append(f"{const} = re.compile({rule['pattern']!r})")
+        code_id = rule.get("id", "STR-06")
+        skip_guards.append(
+            f"    # {code_id}: skip_rows rule on {rule['column']!r} ({rule['provenance']})")
+        skip_guards.append(
+            f"    rt.skip_if(None, bool({const}.match(row[{rule['column']!r}] or '')), "
+            f"code={code_id!r}, reason={rule.get('reason', '')!r})")
+
     mapping_by_target = {m["target"]: m for m in spec["mappings"]}
     helpers: list = []
-    body_lines = []
+    body_lines = list(skip_guards)
     for c in spec["target"]["columns"]:
         m = mapping_by_target.get(c["name"])
         if m is None:
@@ -679,11 +730,13 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
         + review_block,
         '"""',
         "import argparse",
+        *(["import re"] if skip_consts else []),
         "",
         "import etl_runtime as rt",
         "",
         "# ---- Resolved configuration (from the spec — edit the spec, not this) ----",
         *config_lines,
+        *([""] + skip_consts if skip_consts else []),
         "",
         "",
         *(helpers + [""] if helpers else []),

@@ -199,6 +199,158 @@ class TestCompilerEndToEnd(unittest.TestCase):
                              f"etl-spec-compiler/{cs.COMPILER_VERSION}")
 
 
+MINI_SPEC = """etlspec: 0.2
+name: mini
+taxonomy_version: 0.2
+source:
+  format: csv
+  encoding: {value: utf-8, provenance: default}
+  dialect: {delimiter: ",", quotechar: '"'}
+  header: present
+  expected_columns: [id, name, note]
+target:
+  columns:
+    - {name: id, type: string, nullable: false}
+    - {name: name, type: string, nullable: true}
+    - {name: note, type: string, nullable: true}
+policies:
+  unicode_normalization: {value: NFC, provenance: default}
+  strip_control_chars: {value: true, provenance: default}
+  normalize_unicode_whitespace: {value: true, provenance: default}
+  trim_whitespace: {value: true, provenance: default}
+  empty_string_is_null: {value: true, provenance: default}
+  null_propagation: {value: sql, provenance: default}
+  datetime_rendering: {value: iso8601, provenance: default}
+  error_disposition: {value: quarantine, provenance: default}
+  error_budget: {value: {percent: 50, min_rows: 2}, provenance: explicit}
+  duplicate_rows: {value: keep, provenance: default}
+skip_rows:
+  - {column: id, pattern: '^\\D', id: STR-06, reason: "footer/total row", provenance: explicit}
+mappings:
+  - target: id
+    source: id
+    transforms: []
+  - target: name
+    source: name
+    transforms:
+      - {op: repair_mojibake}
+    decisions:
+      - {id: ENC-06, choice: repair, provenance: explicit}
+  - target: note
+    source: note
+    transforms:
+      - {op: expr, python: "(row['note'] or '').upper() if report else None"}
+unmapped:
+  unused_source_columns: []
+  unfilled_target_columns: []
+review_required: []
+"""
+
+
+def _compile_mini():
+    spec = cs.load_etlspec(MINI_SPEC)
+    return cs.compile_spec(spec, spec_bytes=MINI_SPEC.encode(), spec_filename="mini.etlspec.yaml")
+
+
+class TestCompilerNewOps(unittest.TestCase):
+    def _run_mini(self, csv_text):
+        import shutil
+        import subprocess
+        import tempfile
+        import json as jsonmod
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with open(os.path.join(tmp, "mini_pipeline.py"), "w") as f:
+            f.write(_compile_mini())
+        shutil.copy(os.path.join(REPO, "skill", "etl-generator", "assets",
+                                 "etl_runtime.py"), tmp)
+        with open(os.path.join(tmp, "in.csv"), "w", encoding="utf-8", newline="") as f:
+            f.write(csv_text)
+        p = subprocess.run(["python3", "mini_pipeline.py", "in.csv", "--out-dir", "out"],
+                           cwd=tmp, capture_output=True, text=True)
+        summary = jsonmod.load(open(os.path.join(tmp, "out", "summary.json")))
+        return p, summary, tmp
+
+    def test_spec_format_02_accepted(self):
+        self.assertIn("repair_mojibake", _compile_mini())
+
+    def test_repair_mojibake_op_emitted_with_report_and_counted(self):
+        code = _compile_mini()
+        self.assertIn("rt.repair_mojibake(", code)
+        self.assertIn("report=report", code)
+        p, summary, _ = self._run_mini("id,name,note\n1,JosÃ© GarcÃ­a,x\n2,ok,y\n")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(summary["warnings_by_type"].get("ENC-06:name"), 1)
+
+    def test_skip_rows_declarative_footer_skipped_and_counted(self):
+        p, summary, tmp = self._run_mini("id,name,note\n1,a,x\nTotal,,\n")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(summary["rows_out"], 1)
+        self.assertEqual(summary["warnings_by_type"].get("STR-06:<row>"), 1)
+
+    def test_expr_helper_receives_report(self):
+        # the mini spec's expr references `report`; it must compile AND run.
+        p, summary, tmp = self._run_mini("id,name,note\n1,a,hello\n")
+        import csv as csvmod
+        rows = list(csvmod.reader(open(os.path.join(tmp, "out", "output.csv"))))
+        self.assertEqual(rows[1][2], "HELLO")
+
+    def test_concat_op_supported(self):
+        spec = cs.load_etlspec(MINI_SPEC.replace(
+            "- {op: repair_mojibake}",
+            "- {op: concat, sources: [id, name], sep: \"-\"}"))
+        code = cs.compile_spec(spec, spec_bytes=b"x", spec_filename="t.yaml")
+        self.assertIn("rt.concat(", code)
+
+    def test_split_op_declined_with_guidance(self):
+        spec = cs.load_etlspec(MINI_SPEC.replace(
+            "- {op: repair_mojibake}",
+            "- {op: split, on: \"-\", index: 0}"))
+        with self.assertRaises(cs.SpecError) as ctx:
+            cs.compile_spec(spec, spec_bytes=b"x", spec_filename="t.yaml")
+        self.assertIn("split", str(ctx.exception))
+
+
+class TestFullMessySpecEndToEnd(unittest.TestCase):
+    """The iteration-3 gap, closed: the 17-trap orders_export file is now fully
+    compiler-expressible (ENC-06 repair + STR-06 skip_rows as first-class ops)."""
+
+    def test_orders_spec_compiles_and_reproduces_known_accounting(self):
+        import json as jsonmod
+        import shutil
+        import subprocess
+        import tempfile
+        spec_path = os.path.join(REPO, "evals", "inputs", "orders_export.etlspec.yaml")
+        text = open(spec_path, encoding="utf-8").read()
+        spec = cs.load_etlspec(text)
+        code = cs.compile_spec(spec, spec_bytes=text.encode(),
+                               spec_filename="orders_export.etlspec.yaml")
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with open(os.path.join(tmp, "orders_pipeline.py"), "w") as f:
+            f.write(code)
+        shutil.copy(os.path.join(REPO, "skill", "etl-generator", "assets",
+                                 "etl_runtime.py"), tmp)
+        p = subprocess.run(
+            ["python3", "orders_pipeline.py",
+             os.path.join(REPO, "evals", "inputs", "orders_export.csv"),
+             "--out-dir", "out"],
+            cwd=tmp, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 2, p.stderr)  # completed with quarantine
+        s = jsonmod.load(open(os.path.join(tmp, "out", "summary.json")))
+        self.assertEqual((s["rows_in"], s["rows_out"], s["rows_quarantined"]), (9, 6, 1))
+        w = s["warnings_by_type"]
+        self.assertEqual(w.get("ENC-06:customer"), 1)   # mojibake repaired + counted
+        self.assertEqual(w.get("STR-06:<row>"), 2)      # blank row + footer
+        self.assertEqual(w.get("STR-05:<row>"), 1)      # duplicate kept + reported
+        self.assertEqual(s["errors_by_type"], {"STR-02:<row>": 1})  # ragged quarantined
+        import csv as csvmod
+        rows = list(csvmod.reader(open(os.path.join(tmp, "out", "output.csv"))))
+        self.assertEqual(len(rows) - 1, 6)
+        self.assertEqual(rows[1][1], "José")            # repaired + NFC
+        self.assertIn("02134", rows[1][5])              # leading zero preserved
+
+
 class TestCompilerValidation(unittest.TestCase):
     def _spec(self, **override):
         text = open(VENDOR_SPEC, encoding="utf-8").read()
