@@ -33,6 +33,8 @@ python <skill-dir>/scripts/profile.py input_sample.csv --json findings.json
 
 It emits findings keyed by taxonomy IDs (see `references/taxonomy.md`), each with evidence and counts. Read the findings before talking to the user — the profiler output determines the entire interview.
 
+The output has two views of the same findings: `findings` (one per column, full detail) and `interview_groups` (homogeneous `ask` findings collapsed into one question each — e.g. 40 columns that all look like `Y/N` booleans become a single group). **Drive the interview from `interview_groups`, not `findings`** — ask one question per group ("these 40 columns look like Y/N — confirm the mapping applies to all; call out any exceptions"), and let the user override individual columns. This keeps wide files (hundreds of columns) to a handful of questions instead of hundreds. `summary.ask_questions` is the number of questions the interview will actually pose.
+
 ### Step 3 — Interview (detection-driven, never exhaustive)
 
 Consult `references/taxonomy.md` for each finding's decision space, default, and class:

@@ -105,5 +105,42 @@ class TestTyp06Boolean(unittest.TestCase):
         self.assertIn("TYP-06", _ids(result))
 
 
+class TestInterviewGrouping(unittest.TestCase):
+    """Homogeneous per-column ask-findings must collapse into one grouped question
+    so the interview scales (corpus: a 9,074-column file produced 9,073 TYP-06 Qs)."""
+
+    def test_same_boolean_vocab_columns_group_into_one_question(self):
+        cols = ",".join(f"flag{i}" for i in range(5))
+        rows = "\n".join(",".join(["Y", "N"][i % 2] for _ in range(5)) for i in range(6))
+        result = _profile_text(cols + "\n" + rows + "\n")
+        groups = result["interview_groups"]
+        typ06 = [g for g in groups if g["id"] == "TYP-06"]
+        self.assertEqual(len(typ06), 1)
+        self.assertEqual(typ06[0]["n_columns"], 5)
+        self.assertEqual(sorted(typ06[0]["columns"]), [f"flag{i}" for i in range(5)])
+
+    def test_different_boolean_vocabs_stay_separate_groups(self):
+        # Y/N columns and 0/1 columns are different decisions — two groups.
+        # Each column must carry both of its values (a constant column isn't boolean).
+        rows = ["Y,N,1,0", "N,Y,0,1"] * 3
+        text = "yn1,yn2,tf1,tf2\n" + "\n".join(rows) + "\n"
+        groups = _profile_text(text)["interview_groups"]
+        typ06 = [g for g in groups if g["id"] == "TYP-06"]
+        self.assertEqual(len(typ06), 2)
+
+    def test_grouping_preserves_total_column_coverage(self):
+        # No column silently dropped from the interview plan.
+        cols = ",".join(f"z{i}" for i in range(8))
+        rows = "\n".join(",".join("0" + str(i) for i in range(8)) for _ in range(5))
+        result = _profile_text(cols + "\n" + rows + "\n")
+        t07_cols = set()
+        for g in result["interview_groups"]:
+            if g["id"] == "TYP-07":
+                t07_cols |= set(g["columns"])
+        t07_flat = {f["column"] for f in result["findings"]
+                    if f["id"] == "TYP-07" and f.get("column")}
+        self.assertEqual(t07_cols, t07_flat)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -48,7 +48,7 @@ DATE_SLASH_RE = re.compile(r"^\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}$")
 FOOTER_KEYWORDS = re.compile(r"(?i)^(sub)?total|^sum\b|^count\b|^generated|^report|^page \d")
 
 
-def finding(fid, klass, message, column=None, count=None, evidence=None):
+def finding(fid, klass, message, column=None, count=None, evidence=None, group_key=None):
     f = {"id": fid, "class": klass, "message": message}
     if column is not None:
         f["column"] = column
@@ -56,6 +56,10 @@ def finding(fid, klass, message, column=None, count=None, evidence=None):
         f["count"] = count
     if evidence:
         f["evidence"] = evidence
+    if group_key is not None:
+        # Findings sharing (id, group_key) represent the SAME decision across
+        # columns and collapse into one interview question (see group_findings).
+        f["group_key"] = group_key
     return f
 
 
@@ -268,7 +272,7 @@ def profile_nulls(name: str, values: list, findings: list):
     ws_only = sum(1 for v in values if v is not None and v != "" and v.strip() == "")
     if empties:
         findings.append(finding("NUL-01", "ask" , f"{empties} empty value(s) — null or empty string?",
-                                column=name, count=empties))
+                                column=name, count=empties, group_key="empty-is-null"))
     if ws_only:
         findings.append(finding("NUL-02", "fix", f"{ws_only} whitespace-only value(s); default: trim",
                                 column=name, count=ws_only))
@@ -282,9 +286,12 @@ def profile_nulls(name: str, values: list, findings: list):
             if n and n / total > 0.01 and n >= 3:
                 hits[cand] = n
     if hits:
+        # Group by the sentinel token set so identical sentinels across columns
+        # (e.g. "(null)" everywhere) collapse to one confirmation.
         findings.append(finding("NUL-03", "ask",
                                 "possible sentinel value(s) — confirm which mean null",
-                                column=name, evidence=dict(hits.most_common(8))))
+                                column=name, evidence=dict(hits.most_common(8)),
+                                group_key="sentinel:" + ",".join(sorted(hits))))
 
 
 def profile_types(name: str, values: list, findings: list):
@@ -305,12 +312,12 @@ def profile_types(name: str, values: list, findings: list):
             if lowered <= vocab:
                 findings.append(finding("TYP-06", "ask",
                                         f"boolean-like vocabulary {sorted(lowered)} — confirm truth mapping",
-                                        column=name))
+                                        column=name, group_key="bool:" + ",".join(sorted(lowered))))
                 return
     elif lowered == {"x"} and has_empties:
         findings.append(finding("TYP-06", "ask",
                                 "checkbox pattern (X/blank) — confirm truth mapping (true/false or true/null?)",
-                                column=name))
+                                column=name, group_key="bool:x/blank"))
         return
 
     # TYP-01 formatted numerics
@@ -346,11 +353,12 @@ def profile_types(name: str, values: list, findings: list):
             findings.append(finding("TYP-07", "ask",
                                     "leading zeros present — keep as string to avoid data loss",
                                     column=name, count=leading_zeros,
-                                    evidence=[v for v in digit_vals if LEADING_ZERO_RE.match(v)][:3]))
+                                    evidence=[v for v in digit_vals if LEADING_ZERO_RE.match(v)][:3],
+                                    group_key="leading-zero"))
         elif len(widths) == 1 and widths.pop() >= 6 and len(set(digit_vals)) / len(digit_vals) > 0.9:
             findings.append(finding("TYP-07", "ask",
                                     "uniform-width, high-cardinality digits — identifier? keep as string",
-                                    column=name))
+                                    column=name, group_key="uniform-id"))
 
     # TYP-03 date format ambiguity
     slashy = [v for v in vals if DATE_SLASH_RE.match(v)]
@@ -406,6 +414,40 @@ def profile_types(name: str, values: list, findings: list):
                                     column=name, evidence=collisions))
 
 
+# ---------------------------------------------------------------------- interview plan
+
+def group_findings(findings: list) -> list:
+    """Collapse homogeneous per-column `ask` findings into one interview question
+    each, so elicitation scales (a 9,074-column file must not yield 9,073 boolean
+    questions). Findings sharing (id, group_key) are the SAME decision across
+    columns and merge; every affected column is listed (never silently dropped).
+    Findings without a group_key pass through as singleton groups."""
+    groups: dict = {}
+    order = []
+    for f in findings:
+        if f["class"] != "ask":
+            continue
+        key = (f["id"], f.get("group_key") or f.get("column") or f["id"])
+        if key not in groups:
+            groups[key] = {"id": f["id"], "class": "ask",
+                           "group_key": f.get("group_key"),
+                           "message": f["message"], "columns": [], "evidence": {}}
+            order.append(key)
+        g = groups[key]
+        if f.get("column") and f["column"] not in g["columns"]:
+            g["columns"].append(f["column"])
+        if f.get("evidence"):
+            g["evidence"][f.get("column") or "<dataset>"] = f["evidence"]
+    out = []
+    for key in order:
+        g = groups[key]
+        g["n_columns"] = len(g["columns"])
+        if not g["evidence"]:
+            del g["evidence"]
+        out.append(g)
+    return out
+
+
 # ---------------------------------------------------------------------- main
 
 def profile_file(path: str, max_rows: int = MAX_ROWS_DEFAULT) -> dict:
@@ -438,8 +480,10 @@ def profile_file(path: str, max_rows: int = MAX_ROWS_DEFAULT) -> dict:
         "columns": header,
         "rows_profiled": max(0, len(rows) - 1),
         "findings": findings,
+        "interview_groups": group_findings(findings),
         "summary": {
             "ask": sum(1 for f in findings if f["class"] == "ask"),
+            "ask_questions": len(group_findings(findings)),
             "fix": sum(1 for f in findings if f["class"] == "fix"),
             "row-error": sum(1 for f in findings if f["class"] == "row-error"),
         },
