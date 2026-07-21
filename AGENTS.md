@@ -93,6 +93,15 @@ The external evidence corpus backing taxonomy/default decisions is likewise loca
 - Minor profiler noise deferred: TYP-03 false-positive on dotted version numbers (`1.2.10`);
   `FOOTER_KEYWORDS` prefix-matching (`Totally`); `rows_profiled` counts preamble/blank rows.
 - Streaming (multi-GB inputs) stays a non-goal (whole-file read); revisit only if needed.
+- **Deeper altitude (deferred from the simplify pass, both behavior changes):** (a) a
+  row-level `except Exception` in the runtime loop that quarantines an unexpected row error
+  instead of aborting the whole run (honors quarantine-not-abort; needs a taxonomy code for
+  "unexpected row error" — ERR-05 is run-level) — the existing ERR-02 budget then adjudicates
+  transient-vs-systemic; (b) load-time normalization/rejection of control chars in spec
+  free-text scalars (except `expr.python`), so comment-injection is impossible by
+  construction rather than by the `_cmt` guard. Also: the runtime header-scan block
+  (`missing`/`extra`/`col_index`/dup-headers) is O(cols²) — fine at tens, seconds at
+  thousands; de-quadratic with a `Counter(header)` if wide files become real.
 
 ## Prioritized next steps
 

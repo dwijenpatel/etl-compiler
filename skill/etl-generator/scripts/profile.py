@@ -23,6 +23,7 @@ import unicodedata
 from collections import Counter
 
 MAX_ROWS_DEFAULT = 1000
+SNIFF_DELIMITERS = ",;\t|"       # candidate delimiters the sniffer tries (STR-01)
 
 KNOWN_SENTINELS = {"n/a", "n.a.", "na", "null", "none", "nil", "-", "--", "---", ".",
                    "?", "#n/a", "unknown", "(blank)", "(null)", "(none)", "(empty)",
@@ -45,7 +46,14 @@ LEADING_ZERO_RE = re.compile(r"^0\d+$")
 PLAIN_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
 # Ambiguous D/M dates, separators / - or . (European dotted DD.MM.YYYY included). TYP-03.
 DATE_SLASH_RE = re.compile(r"^\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}$")
+DATE_SPLIT_RE = re.compile(r"[/.\-]")   # splits a matched date on its own separator(s)
 FOOTER_KEYWORDS = re.compile(r"(?i)^(sub)?total|^sum\b|^count\b|^generated|^report|^page \d")
+
+
+def _is_blank_row(r) -> bool:
+    """A row is blank when every field is empty/whitespace — the STR-06 definition,
+    shared so STR-05/STR-06 and the runtime stay aligned by construction, not comment."""
+    return not any(f.strip() for f in r)
 
 
 def finding(fid, klass, message, column=None, count=None, evidence=None, group_key=None):
@@ -115,7 +123,7 @@ def sniff_dialect(text: str, findings: list):
     sample = text[:8192]
     delim = ","
     try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        dialect = csv.Sniffer().sniff(sample, delimiters=SNIFF_DELIMITERS)
         delim = dialect.delimiter
         if delim != ",":
             findings.append(finding("STR-01", "ask",
@@ -125,8 +133,8 @@ def sniff_dialect(text: str, findings: list):
         # No delimiter candidate found. A genuine single-column file (no delimiter
         # in any line) is not a problem — don't raise a spurious STR-01 ask (F8);
         # only ask when some line actually contains a candidate delimiter.
-        first_lines = sample.splitlines()[:20]
-        if any(any(d in ln for d in ",;\t|") for ln in first_lines):
+        head = "\n".join(sample.splitlines()[:20])
+        if any(d in head for d in SNIFF_DELIMITERS):
             findings.append(finding("STR-01", "ask",
                                     "could not sniff dialect — confirm delimiter"))
     return delim
@@ -156,7 +164,7 @@ def detect_preamble(rows: list) -> int:
     # Signal A: narrow leading rows.
     n = 0
     for r in rows:
-        if len(r) < modal_width and any(f.strip() for f in r):
+        if len(r) < modal_width and not _is_blank_row(r):
             n += 1
         else:
             break
@@ -222,7 +230,7 @@ def profile_structure(rows: list, findings: list):
         findings.append(finding("STR-02", "row-error",
                                 f"{len(ragged)} ragged row(s); default: quarantine",
                                 count=len(ragged), evidence=ragged[:5]))
-    blank_rows = [i + 2 for i, r in enumerate(data) if not any(f.strip() for f in r)]
+    blank_rows = [i + 2 for i, r in enumerate(data) if _is_blank_row(r)]
     if blank_rows:
         findings.append(finding("STR-06", "fix",
                                 f"{len(blank_rows)} fully blank row(s); default: skip and count",
@@ -230,7 +238,7 @@ def profile_structure(rows: list, findings: list):
     # footer heuristic: last non-blank row starting with an aggregate keyword
     for i in range(len(data) - 1, -1, -1):
         r = data[i]
-        if any(f.strip() for f in r):
+        if not _is_blank_row(r):
             if r and FOOTER_KEYWORDS.search(r[0].strip()):
                 findings.append(finding("STR-06", "ask",
                                         f"row {i + 2} looks like a footer/total row — confirm exclusion",
@@ -238,7 +246,7 @@ def profile_structure(rows: list, findings: list):
             break
     # STR-05: exclude fully-blank rows (they are STR-06); matches the runtime,
     # which skips blanks before the duplicate check (F6).
-    nonblank = [r for r in data if any(f.strip() for f in r)]
+    nonblank = [r for r in data if not _is_blank_row(r)]
     exact_dupes = sum(n - 1 for n in Counter(map(tuple, nonblank)).values() if n > 1)
     if exact_dupes:
         findings.append(finding("STR-05", "ask",
@@ -379,7 +387,7 @@ def profile_types(name: str, values: list, findings: list):
         for v in slashy:
             # split each value on ITS OWN separator; a mixed-separator column
             # must not crash (F1) — non-3-part values just count as bad.
-            parts = re.split(r"[/.\-]", v)
+            parts = DATE_SPLIT_RE.split(v)
             if len(parts) != 3:
                 bad += 1
                 continue

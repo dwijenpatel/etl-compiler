@@ -583,14 +583,16 @@ def _mapping_comment(m):
     bits = []
     for d in m.get("decisions") or []:
         choice = d.get("choice")
-        seg = f"{_cmt(d['id'])}: {_cmt(choice)}" if choice is not None else _cmt(d["id"])
-        bits.append(f"{seg} ({_cmt(d['provenance'])})")
+        seg = f"{d['id']}: {choice}" if choice is not None else d["id"]
+        bits.append(f"{seg} ({d['provenance']})")
     sent = m.get("sentinels")
     if sent:
-        bits.append(f"sentinels {sent['values']!r} ({_cmt(sent['provenance'])})")
-    src = _cmt(m.get("source", "(constant)"))
+        bits.append(f"sentinels {sent['values']!r} ({sent['provenance']})")
+    src = m.get("source", "(constant)")
     tail = f"  [{'; '.join(bits)}]" if bits else ""
-    return f"    # {_cmt(m['target'])} <- {src}{tail}"
+    # Sanitize the ASSEMBLED line once — simpler than per-field, and it also
+    # catches a `\"\"\"` straddling a field boundary that per-field wrapping misses.
+    return _cmt(f"    # {m['target']} <- {src}{tail}")
 
 
 def _emit_mapping(m, col, helpers):
@@ -717,9 +719,9 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
         const = f"_SKIP{idx}_RE"
         skip_consts.append(f"{const} = re.compile({rule['pattern']!r})")
         code_id = rule.get("id", "STR-06")
-        skip_guards.append(
-            f"    # {_cmt(code_id)}: skip_rows rule on {rule['column']!r} "
-            f"({_cmt(rule['provenance'])})")
+        skip_guards.append(_cmt(
+            f"    # {code_id}: skip_rows rule on {rule['column']!r} "
+            f"({rule['provenance']})"))
         skip_guards.append(
             f"    rt.skip_if(None, bool({const}.match(row[{rule['column']!r}] or '')), "
             f"code={code_id!r}, reason={rule.get('reason', '')!r})")
@@ -733,7 +735,7 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
         fn = f"_t_{idx}"
         if m is None:
             field_fn_blocks += [f"def {fn}(row, report):",
-                                f"    # {c['name']} — unfilled (declared in spec.unmapped)",
+                                _cmt(f"    # {c['name']} — unfilled (declared in spec.unmapped)"),
                                 "    return None", "", ""]
         else:
             field_fn_blocks += [f"def {fn}(row, report):",

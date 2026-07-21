@@ -485,24 +485,27 @@ def run_pipeline(*, input_path: str, out_dir: str, config: dict, transform_row=N
     field be NULLed-and-ledgered while the rest of the row survives."""
     report = RunReport()
     os.makedirs(out_dir, exist_ok=True)
+
+    def abort(code, message):
+        # The single terminate-and-report contract: record the run error, write
+        # all reports (which also removes any stale output.csv), return exit 1.
+        report.run_error = {"code": code, "message": message}
+        _write_reports(out_dir, report, config, input_path)
+        return RunResult(1, report, out_dir)
+
     try:
         return _run_pipeline(input_path, out_dir, config, transform_row,
-                             field_transforms, row_guards, report)
+                             field_transforms, row_guards, report, abort)
     except RunError as e:
         # ERR-05: a failed run leaves no partial output — but always the reports.
-        report.run_error = {"code": e.code, "message": e.message}
-        _write_reports(out_dir, report, config, input_path)
-        return RunResult(1, report, out_dir)
+        return abort(e.code, e.message)
     except Exception as e:  # noqa: BLE001 — ERR-05 applies to unexpected bugs too:
         # a broken expr / config typo must still leave reports, not a bare traceback.
-        report.run_error = {"code": "ERR-05",
-                            "message": f"unexpected {type(e).__name__}: {e}"}
-        _write_reports(out_dir, report, config, input_path)
-        return RunResult(1, report, out_dir)
+        return abort("ERR-05", f"unexpected {type(e).__name__}: {e}")
 
 
 def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
-                  field_transforms, row_guards, report: RunReport) -> RunResult:
+                  field_transforms, row_guards, report: RunReport, abort) -> RunResult:
     pol = config.get("policies", {})
     sentinels_by_col = {c: tuple(v) for c, v in pol.get("sentinels", {}).items()}
     disposition = pol.get("error_disposition", "quarantine")  # ERR-01
@@ -594,31 +597,22 @@ def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
             report.warn("<row>", skip.code)
         except RowError as err:
             if disposition == "fail-fast":
-                report.run_error = {"code": err.code,
-                                    "message": f"fail-fast on row {i}: {err.message}"}
-                _write_reports(out_dir, report, config, input_path)
-                return RunResult(1, report, out_dir)
+                return abort(err.code, f"fail-fast on row {i}: {err.message}")
             report.add_row_error(i, raw, err, expected)
             # ERR-02: row tolerance must not mask systemic failure. min_rows is a
             # minimum SAMPLE size (small files judged at end-of-run), not a
             # minimum failure count.
             if (report.rows_in >= budget.get("min_rows", 100)
                     and 100.0 * len(report.quarantined) / report.rows_in > budget.get("percent", 5)):
-                report.run_error = {
-                    "code": "ERR-02",
-                    "message": (f"error budget exceeded: {len(report.quarantined)} of "
-                                f"{report.rows_in} rows failed (> {budget.get('percent', 5)}%)"),
-                }
-                _write_reports(out_dir, report, config, input_path)
-                return RunResult(1, report, out_dir)
+                return abort("ERR-02",
+                             f"error budget exceeded: {len(report.quarantined)} of "
+                             f"{report.rows_in} rows failed (> {budget.get('percent', 5)}%)")
 
     # ERR-02 end-of-run check: whatever the budget, a run in which EVERY row
-    # failed is systemic failure, never success-with-warnings.
-    if report.rows_in and not out_rows and report.quarantined:
-        report.run_error = {"code": "ERR-02",
-                            "message": f"all {report.rows_in} data row(s) failed"}
-        _write_reports(out_dir, report, config, input_path)
-        return RunResult(1, report, out_dir)
+    # failed is systemic failure, never success-with-warnings. (A non-empty
+    # quarantine implies rows_in >= 1, so no separate rows_in guard is needed.)
+    if not out_rows and report.quarantined:
+        return abort("ERR-02", f"all {report.rows_in} data row(s) failed")
 
     report.rows_out = len(out_rows)
     # ERR-05: atomic output — write to temp, promote on success only.
@@ -699,7 +693,8 @@ def _write_reports(out_dir: str, report: RunReport, config: dict, input_path: st
                 w.writerow([row_number, json.dumps(raw)])
     with open(os.path.join(out_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(report.summary(), f, indent=2)
-    sha = hashlib.sha256(open(input_path, "rb").read()).hexdigest()
+    with open(input_path, "rb") as f:
+        sha = hashlib.sha256(f.read()).hexdigest()
     # ERR-06: spec provenance — hash of the resolved config the pipeline embeds.
     spec_sha = hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":"),
                                          default=str).encode("utf-8")).hexdigest()
