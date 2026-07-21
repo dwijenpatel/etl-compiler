@@ -1,6 +1,10 @@
 ---
 name: etl-generator
 description: Interactive ETL code generator built on a failure-mode taxonomy. Use this skill whenever the user wants to transform, map, convert, migrate, load, or clean tabular data (CSV/TSV) from one structure to another, wants ETL or data-pipeline code written, mentions mapping source data to a target schema/format, or asks for "a script to convert this file" — even if they never say "ETL". Also use it when the user provides an existing mapping spec (.etlspec.yaml) and wants the pipeline regenerated or modified, or when they complain about data quality issues (bad dates, nulls, weird characters, encoding problems) in a file they need to process. It profiles samples, interviews the user only about issues actually detected, records every decision in an auditable spec, and generates hardened Python whose edge-case handling lives in a tested runtime module.
+compatibility: Requires Python 3 (standard library only — no third-party packages) and the ability to run bundled scripts. Harness-agnostic; conforms to the Agent Skills open standard.
+metadata:
+  taxonomy-version: "0.2"
+  runtime-version: "0.2.0"
 ---
 
 # ETL Generator
@@ -25,10 +29,10 @@ Strongly preferred: a sample of the **desired output**, and/or a target schema (
 
 ### Step 2 — Profile
 
-Run the bundled profiler on the input sample (and the output sample if provided):
+Run the bundled profiler (`scripts/profile.py`, relative to this skill's directory) on the input sample (and the output sample if provided):
 
 ```bash
-python <skill-dir>/scripts/profile.py input_sample.csv --json findings.json
+python3 scripts/profile.py input_sample.csv --json findings.json
 ```
 
 It emits findings keyed by taxonomy IDs (see `references/taxonomy.md`), each with evidence and counts. Read the findings before talking to the user — the profiler output determines the entire interview.
@@ -40,7 +44,7 @@ The output has two views of the same findings: `findings` (one per column, full 
 Consult `references/taxonomy.md` for each finding's decision space, default, and class:
 
 - `fix`-class findings: apply the default silently, but record each in the spec and mention them in one summary line ("I'll strip the BOM, normalize unicode to NFC, and trim whitespace — all counted in run reports").
-- `ask`-class findings: these are meaning-changing. Ask the user, showing the profiler's evidence ("`order_date` is ambiguous: all 240 values parse as both MDY and DMY — which is it?"). Batch related questions; use AskUserQuestion when available. Never guess on: date format ambiguity (TYP-03), decimal locale (TYP-02), sentinel values (NUL-03), timezone of naive datetimes (TYP-04).
+- `ask`-class findings: these are meaning-changing. Ask the user, showing the profiler's evidence ("`order_date` is ambiguous: all 240 values parse as both MDY and DMY — which is it?"). Batch related questions and pose them together (drive this from the profiler's `interview_groups`, which collapses identical per-column decisions into one question); if the harness offers a structured or multiple-choice question interface, use it, otherwise ask in plain text. Never guess on: date format ambiguity (TYP-03), decimal locale (TYP-02), sentinel values (NUL-03), timezone of naive datetimes (TYP-04).
 - Findings absent from the profile: take the default, record it with provenance `default`. Do not ask about them.
 
 **Unattended mode:** if there is no user to interview (batch/CI context, or the user has said "just make reasonable choices"), do not block. Choose the safest option for each `ask`-class finding (the one that quarantines rather than reinterprets data), mark those decisions `provenance: unconfirmed` in the spec, and list them prominently at the end so a human can review.
@@ -67,7 +71,7 @@ Every generated error path uses taxonomy IDs as error codes. Every mapping carri
 Always execute the generated pipeline against the input sample:
 
 ```bash
-python <name>_pipeline.py input_sample.csv --out-dir ./etl_out
+python3 <name>_pipeline.py input_sample.csv --out-dir ./etl_out
 ```
 
 Check: the run completes; the report is written; quarantine counts match expectations from profiling; and if an output sample was provided, diff the produced output against it and reconcile every discrepancy (a discrepancy is either a bug to fix or an undocumented decision to surface to the user). Show the user the run summary — it is the best demonstration that the pipeline works.
