@@ -403,6 +403,72 @@ class TestFullMessySpecEndToEnd(unittest.TestCase):
         self.assertIn("02134", rows[1][5])              # leading zero preserved
 
 
+class TestCompilerInjectionAndFailLoud(unittest.TestCase):
+    """A spec is the attack surface. Code may reach the pipeline ONLY through the
+    loud `op: expr` hatch — never smuggled through metadata into docstring/comments.
+    And malformed specs fail loud (SpecError + line), never raw KeyError/traceback."""
+
+    def _compiles_without_injection(self, text, marker="INJECTED"):
+        spec = cs.load_etlspec(text)
+        code = cs.compile_spec(spec, spec_bytes=text.encode(), spec_filename="t.yaml")
+        # the emitted module must import + define transform_row without executing
+        # any smuggled top-level statement
+        ns = {}
+        import types
+        mod = types.ModuleType("emitted")
+        # stub the runtime import so exec doesn't need the real module on path
+        import sys
+        sys.modules.setdefault("etl_runtime", types.ModuleType("etl_runtime"))
+        exec(compile(code, "emitted", "exec"), mod.__dict__)
+        return code
+
+    def test_taxonomy_version_cannot_break_out_of_docstring(self):
+        bad = MINI_SPEC.replace("taxonomy_version: 0.2",
+                                'taxonomy_version: "0.2\\"\\"\\"\\nprint(1/0)\\n\\"\\"\\""')
+        with self.assertRaises(cs.SpecError):
+            cs.validate_spec(cs.load_etlspec(bad))
+
+    def test_decision_id_newline_cannot_inject_into_comment(self):
+        bad = MINI_SPEC.replace(
+            "decisions:\n      - {id: ENC-06, choice: repair, provenance: explicit}",
+            'decisions:\n      - {id: "ENC-06\\nprint(1/0)  ", choice: x, provenance: explicit}')
+        # either rejected, or emitted such that no injected statement executes
+        try:
+            code = self._compiles_without_injection(bad)
+            self.assertNotIn("\nprint(1/0)", code)
+        except cs.SpecError:
+            pass
+
+    def test_expr_without_python_fails_loud(self):
+        bad = MINI_SPEC.replace("- {op: repair_mojibake}", "- {op: expr}")
+        with self.assertRaises(cs.SpecError) as ctx:
+            cs.compile_spec(cs.load_etlspec(bad), spec_bytes=b"x", spec_filename="t.yaml")
+        self.assertIn("expr", str(ctx.exception).lower())
+
+    def test_constant_without_value_fails_loud(self):
+        bad = MINI_SPEC.replace("- {op: repair_mojibake}", "- {op: constant}")
+        with self.assertRaises(cs.SpecError):
+            cs.compile_spec(cs.load_etlspec(bad), spec_bytes=b"x", spec_filename="t.yaml")
+
+    def test_sentinels_missing_provenance_fails_loud(self):
+        bad = MINI_SPEC.replace(
+            "  - target: note\n    source: note",
+            "  - target: note\n    source: note\n    sentinels: {values: [\"N/A\"]}")
+        with self.assertRaises(cs.SpecError):
+            cs.compile_spec(cs.load_etlspec(bad), spec_bytes=b"x", spec_filename="t.yaml")
+
+    def test_decision_provenance_validated(self):
+        bad = MINI_SPEC.replace("provenance: explicit}\n  - target: note",
+                                "provenance: made-it-up}\n  - target: note")
+        with self.assertRaises(cs.SpecError):
+            cs.compile_spec(cs.load_etlspec(bad), spec_bytes=b"x", spec_filename="t.yaml")
+
+    def test_name_with_trailing_newline_rejected(self):
+        bad = MINI_SPEC.replace("name: mini", 'name: "mini\\n"')
+        with self.assertRaises(cs.SpecError):
+            cs.validate_spec(cs.load_etlspec(bad))
+
+
 class TestCompilerValidation(unittest.TestCase):
     def _spec(self, **override):
         text = open(VENDOR_SPEC, encoding="utf-8").read()

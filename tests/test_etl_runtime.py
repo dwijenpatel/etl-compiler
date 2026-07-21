@@ -7,6 +7,7 @@ reading, and the pipeline driver. Test names carry the taxonomy IDs they pin.
 """
 import csv
 import hashlib
+import io
 import json
 import os
 import sys
@@ -234,12 +235,16 @@ class TestReadTextWithPolicy(unittest.TestCase):
         self.assertTrue(text.startswith("id,"))
         self.assertEqual(report.warnings[("<file>", "ENC-02")], 1)
 
-    def test_str07_line_endings_normalized_and_counted(self):
+    def test_str07_line_endings_counted_not_rewritten(self):
+        # Counted only: csv.reader handles \n, \r\n and \r as terminators, and a
+        # blanket rewrite would corrupt CRLF inside quoted fields.
         report = rt.RunReport()
         path = self._write(b"id\r\n1\r2\n")
         text = rt.read_text_with_policy(path, "utf-8", report)
-        self.assertEqual(text, "id\n1\n2\n")
+        self.assertEqual(text, "id\r\n1\r2\n")
         self.assertEqual(report.warnings[("<file>", "STR-07")], 1)
+        self.assertEqual([r for r in csv.reader(io.StringIO(text, newline=""))],
+                         [["id"], ["1"], ["2"]])
 
     def test_enc01_undecodable_file_is_run_error_never_replacement_chars(self):
         report = rt.RunReport()
@@ -483,6 +488,70 @@ class TestRunPipeline(unittest.TestCase):
         self.assertEqual(rec["csv_line"], "2")            # raw line, CSV-rendered
         self.assertIn("column_idx", rec)                  # None for row-level errors
         self.assertIsNone(rec["column_idx"])
+
+    # ------------------------------------------------------------------
+    # Code-review fixes (2026-07-21)
+    # ------------------------------------------------------------------
+
+    def test_unexpected_exception_still_writes_reports_exit_1(self):
+        # ERR-05: ANY failure leaves the reports, not a bare traceback — including
+        # a buggy expr raising a non-RowError.
+        path = self._input("id,name\n1,a\n")
+
+        def bad_transform(row, report):
+            raise ValueError("buggy custom expr")
+
+        res = rt.run_pipeline(input_path=path, out_dir=self.out_dir,
+                              config=self._config(), transform_row=bad_transform)
+        self.assertEqual(res.exit_code, 1)
+        self.assertEqual(res.report.run_error["code"], "ERR-05")
+        self.assertIn("ValueError", res.report.run_error["message"])
+        self.assertTrue(os.path.exists(os.path.join(self.out_dir, "summary.json")))
+
+    def test_err02_small_file_total_failure_is_run_error_not_success(self):
+        # A file below min_rows where EVERY row fails must not exit 2 with an
+        # empty output — that is systemic failure, ERR-02's whole reason to exist.
+        path = self._input("id,name\n1\n2\n3\n")   # all ragged
+        cfg = self._config()                        # default budget min_rows=100
+        res = rt.run_pipeline(input_path=path, out_dir=self.out_dir, config=cfg,
+                              transform_row=_passthrough_transform(["id", "name"]))
+        self.assertEqual(res.exit_code, 1)
+        self.assertEqual(res.report.run_error["code"], "ERR-02")
+        self.assertFalse(os.path.exists(os.path.join(self.out_dir, "output.csv")))
+
+    def test_failed_rerun_removes_stale_output(self):
+        # Run A succeeds; run B into the same out_dir fails (KEY-02): the stale
+        # output.csv from A must not survive next to a failing manifest.
+        ok = self._input("id,name\n1,a\n", name="ok.csv")
+        rt.run_pipeline(input_path=ok, out_dir=self.out_dir, config=self._config(),
+                        transform_row=_passthrough_transform(["id", "name"]))
+        self.assertTrue(os.path.exists(os.path.join(self.out_dir, "output.csv")))
+        bad = self._input("id,wrong\n1,a\n", name="bad.csv")
+        res = rt.run_pipeline(input_path=bad, out_dir=self.out_dir,
+                              config=self._config(),
+                              transform_row=_passthrough_transform(["id", "name"]))
+        self.assertEqual(res.exit_code, 1)
+        self.assertFalse(os.path.exists(os.path.join(self.out_dir, "output.csv")))
+
+    def test_duplicate_expected_header_names_fail_loud(self):
+        path = self._input("id,name,id\n1,a,2\n")
+        res = rt.run_pipeline(input_path=path, out_dir=self.out_dir,
+                              config=self._config(),
+                              transform_row=_passthrough_transform(["id", "name"]))
+        self.assertEqual(res.exit_code, 1)
+        self.assertEqual(res.report.run_error["code"], "STR-04")
+        self.assertIn("id", res.report.run_error["message"])
+
+    def test_quoted_crlf_inside_field_is_preserved(self):
+        # STR-07 counting must not rewrite CRLF that lives INSIDE a quoted field.
+        path = self._input('id,name\n1,"a\r\nb"\r\n2,c\r\n')
+        rt.run_pipeline(input_path=path, out_dir=self.out_dir,
+                        config=self._config(),
+                        transform_row=_passthrough_transform(["id", "name"]))
+        with open(os.path.join(self.out_dir, "output.csv"), newline="",
+                  encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        self.assertEqual(rows[1][1], "a\r\nb")
 
     # ------------------------------------------------------------------
     # ERR-06: manifest carries spec provenance

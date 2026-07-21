@@ -452,7 +452,8 @@ def format_datetime(value, column: str, *, fmt=ISO8601_DATE):
 # ---------------------------------------------------------------------------
 
 def read_text_with_policy(path: str, encoding: str, report: RunReport) -> str:
-    raw = open(path, "rb").read()
+    with open(path, "rb") as f:
+        raw = f.read()
     if raw.startswith(b"\xef\xbb\xbf"):  # ENC-02
         raw = raw[3:]
         report.warn("<file>", "ENC-02")
@@ -462,9 +463,10 @@ def read_text_with_policy(path: str, encoding: str, report: RunReport) -> str:
         # ENC-01: never decode with replacement characters silently — that's data loss.
         raise RunError("ENC-01", f"file is not valid {encoding}: {e}. "
                                  "Re-profile the file and declare the correct encoding in the spec.")
-    if "\r" in text:  # STR-07
+    if "\r" in text:  # STR-07: counted, NOT rewritten — csv.reader handles all of
+        # \n, \r\n and \r as row terminators, and a blanket replace would corrupt
+        # legitimate CRLF inside quoted fields.
         report.warn("<file>", "STR-07")
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
     return text
 
 
@@ -489,6 +491,12 @@ def run_pipeline(*, input_path: str, out_dir: str, config: dict, transform_row=N
     except RunError as e:
         # ERR-05: a failed run leaves no partial output — but always the reports.
         report.run_error = {"code": e.code, "message": e.message}
+        _write_reports(out_dir, report, config, input_path)
+        return RunResult(1, report, out_dir)
+    except Exception as e:  # noqa: BLE001 — ERR-05 applies to unexpected bugs too:
+        # a broken expr / config typo must still leave reports, not a bare traceback.
+        report.run_error = {"code": "ERR-05",
+                            "message": f"unexpected {type(e).__name__}: {e}"}
         _write_reports(out_dir, report, config, input_path)
         return RunResult(1, report, out_dir)
 
@@ -518,7 +526,10 @@ def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
     budget = pol.get("error_budget", {"percent": 5, "min_rows": 100})  # ERR-02
 
     text = read_text_with_policy(input_path, config.get("encoding", "utf-8"), report)
-    reader = csv.reader(io.StringIO(text), delimiter=config.get("delimiter", ","),
+    # newline="" lets csv own row-termination: it accepts \n, \r\n and lone \r
+    # (old-Mac) alike AND preserves CRLF inside quoted fields (STR-07 is counted,
+    # never rewritten).
+    reader = csv.reader(io.StringIO(text, newline=""), delimiter=config.get("delimiter", ","),
                         quotechar=config.get("quotechar", '"'))
     rows = list(reader)
     if not rows:
@@ -529,6 +540,9 @@ def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
     missing = [c for c in expected if c not in header]
     if missing:  # KEY-02
         raise RunError("KEY-02", f"expected column(s) missing from input: {missing}")
+    dup_headers = sorted({c for c in expected if header.count(c) > 1})
+    if dup_headers:  # STR-04: which occurrence to read from is ambiguous — never guess
+        raise RunError("STR-04", f"duplicate header column name(s): {dup_headers}")
     extra = [c for c in header if c not in expected]
     if extra:  # KEY-03
         report.warn("<file>", "KEY-03")
@@ -585,9 +599,10 @@ def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
                 _write_reports(out_dir, report, config, input_path)
                 return RunResult(1, report, out_dir)
             report.add_row_error(i, raw, err, expected)
-            # ERR-02: row tolerance must not mask systemic failure.
-            if (len(report.quarantined) >= budget.get("min_rows", 100)
-                    and report.rows_in
+            # ERR-02: row tolerance must not mask systemic failure. min_rows is a
+            # minimum SAMPLE size (small files judged at end-of-run), not a
+            # minimum failure count.
+            if (report.rows_in >= budget.get("min_rows", 100)
                     and 100.0 * len(report.quarantined) / report.rows_in > budget.get("percent", 5)):
                 report.run_error = {
                     "code": "ERR-02",
@@ -596,6 +611,14 @@ def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
                 }
                 _write_reports(out_dir, report, config, input_path)
                 return RunResult(1, report, out_dir)
+
+    # ERR-02 end-of-run check: whatever the budget, a run in which EVERY row
+    # failed is systemic failure, never success-with-warnings.
+    if report.rows_in and not out_rows and report.quarantined:
+        report.run_error = {"code": "ERR-02",
+                            "message": f"all {report.rows_in} data row(s) failed"}
+        _write_reports(out_dir, report, config, input_path)
+        return RunResult(1, report, out_dir)
 
     report.rows_out = len(out_rows)
     # ERR-05: atomic output — write to temp, promote on success only.
@@ -653,6 +676,13 @@ def _atomic_write_csv(path: str, header: list, rows: list):
 
 def _write_reports(out_dir: str, report: RunReport, config: dict, input_path: str):
     """ERR-03: all three granularities, always. ERR-06: manifest, always."""
+    if report.run_error:
+        # A failed run must not leave a previous run's output.csv sitting next to
+        # a failing manifest — stale data would read as current.
+        try:
+            os.unlink(os.path.join(out_dir, "output.csv"))
+        except OSError:
+            pass
     with open(os.path.join(out_dir, "errors.jsonl"), "w", encoding="utf-8") as f:
         for e in report.row_errors:
             f.write(json.dumps(e) + "\n")

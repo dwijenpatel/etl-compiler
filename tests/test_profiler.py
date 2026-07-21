@@ -105,6 +105,52 @@ class TestTyp06Boolean(unittest.TestCase):
         self.assertIn("TYP-06", _ids(result))
 
 
+class TestCodeReviewFixes(unittest.TestCase):
+    """Fixes from the 2026-07-21 profiler review — verified crash/miss cases."""
+
+    def test_mixed_separator_dates_do_not_crash(self):
+        # F1: a column mixing / and . separators must not raise ValueError.
+        text = "when,n\n01/02/2020,1\n03.04.2020,2\n05/06/2020,3\n07/08/2020,4\n"
+        result = _profile_text(text)  # must not raise
+        self.assertIsInstance(result["findings"], list)
+
+    def test_distinct_same_id_questions_do_not_collapse(self):
+        # F2: duplicate-header STR-04 and blank-header STR-04 are DIFFERENT
+        # decisions; both must survive into interview_groups (never guess).
+        text = "id,id,\n1,2,3\n4,5,6\n"
+        groups = _profile_text(text)["interview_groups"]
+        str04 = [g for g in groups if g["id"] == "STR-04"]
+        msgs = {g["message"] for g in str04}
+        self.assertTrue(any("duplicate" in m for m in msgs), msgs)
+        self.assertTrue(any("blank" in m for m in msgs), msgs)
+
+    def test_single_column_file_no_spurious_delimiter_question(self):
+        # F8: a legitimate single-column file must not raise an STR-01 "confirm
+        # delimiter" ask.
+        ids = _ids(_profile_text("name\nAlice\nBob\nCarol\n"))
+        self.assertNotIn("STR-01", ids)
+
+    def test_blank_rows_not_counted_as_exact_duplicates(self):
+        # F6: identical blank rows are STR-06 (blank), not STR-05 (duplicate) —
+        # consistency with the runtime, which skips blanks before the dup check.
+        result = _profile_text("id,n\n1,a\n\n\n\n")
+        ids = _ids(result)
+        self.assertNotIn("STR-05", ids)
+
+    def test_preamble_with_blank_separator_line_finds_real_header(self):
+        # F3: ONS shape with a blank line between metadata block and data.
+        text = ('"Title","GDP"\n"CDID","IHYQ"\n"Unit","%"\n'
+                '\n'
+                '"1955 Q1","0.1"\n"1955 Q2","1.7"\n"1955 Q3","-0.6"\n"1955 Q4","0.2"\n')
+        result = _profile_text(text)
+        ids = _ids(result)
+        self.assertIn("STR-06", ids)
+        # header must NOT be the empty/blank row, and data rows must not all be
+        # mis-reported as ragged
+        self.assertNotEqual(result["columns"], [])
+        self.assertNotIn("STR-02", ids)
+
+
 class TestInterviewGrouping(unittest.TestCase):
     """Homogeneous per-column ask-findings must collapse into one grouped question
     so the interview scales (corpus: a 9,074-column file produced 9,073 TYP-06 Qs)."""

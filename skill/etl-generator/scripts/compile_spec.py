@@ -141,7 +141,7 @@ def _preprocess(text):
         content = stripped.strip()
         for marker, name in (("&", "anchor"), ("*", "alias"), ("!", "tag")):
             # only reject as syntax when a bare token starts with the marker
-            if re.search(rf"(?:^|[:\s-]\s*){re.escape(marker)}\w", content) and not _in_quotes_only(content, marker):
+            if re.search(rf"(?:^|[:\s{{[,-]\s*){re.escape(marker)}\w", content) and not _in_quotes_only(content, marker):
                 _fail(lineno, f"YAML {name} is outside the etlspec subset")
         if re.search(r":\s*[|>]\s*$", content):
             _fail(lineno, "block scalar (| or >) is outside the etlspec subset")
@@ -428,6 +428,11 @@ OPS = {
     "constant": ["value"],
     "expr": ["python"],
 }
+# Required kwargs per op — checked in validate_spec so omission is a line-numbered
+# SpecError, never a raw KeyError at emit time.
+REQUIRED_KWARGS = {"expr": ("python",), "constant": ("value",),
+                   "to_date": ("formats",), "to_datetime": ("formats",),
+                   "to_bool": ("mapping",)}
 # split's miss-semantics have no taxonomy home yet (relates to the deferred
 # "embedded values" coverage candidate) — declined honestly, not half-shipped.
 UNSUPPORTED_OPS = {"split"}
@@ -447,8 +452,10 @@ def validate_spec(spec: dict):
     _require(str(spec["etlspec"]) in SUPPORTED_ETLSPEC,
              f"etlspec format {spec['etlspec']!r} not supported "
              f"(known: {sorted(SUPPORTED_ETLSPEC)})")
-    _require(re.match(r"^[a-z][a-z0-9_]*$", str(spec["name"])),
+    _require(re.match(r"^[a-z][a-z0-9_]*\Z", str(spec["name"])),
              f"spec name {spec['name']!r} must be snake_case")
+    _require(re.match(r"^\d+\.\d+\Z", str(spec["taxonomy_version"])),
+             f"taxonomy_version {spec['taxonomy_version']!r} must be like '0.2'")
 
     src = spec["source"]
     _require(src.get("format") == "csv",
@@ -525,9 +532,20 @@ def validate_spec(spec: dict):
             for kwarg in tr:
                 _require(kwarg == "op" or kwarg in OPS[op],
                          f"op {op!r}: unknown argument {kwarg!r}")
+            for req in REQUIRED_KWARGS.get(op, ()):  # fail loud, not KeyError at emit
+                _require(req in tr, f"op {op!r} for {t!r} requires {req!r}")
         for d in m.get("decisions") or []:
             _require("id" in d and "provenance" in d,
                      f"decision {d!r} on {t!r} needs id + provenance")
+            _require(d["provenance"] in PROVENANCES,
+                     f"decision {d['id']!r} on {t!r}: provenance {d['provenance']!r} "
+                     f"not in {sorted(PROVENANCES)}")
+        sent = m.get("sentinels")
+        if sent is not None:
+            _require(isinstance(sent, dict) and isinstance(sent.get("values"), list),
+                     f"sentinels on {t!r} needs a values list")
+            _require(sent.get("provenance") in PROVENANCES,
+                     f"sentinels on {t!r} needs a provenance in {sorted(PROVENANCES)}")
 
     declared_unfilled = set((spec.get("unmapped") or {}).get("unfilled_target_columns") or [])
     for name in col_by_name:
@@ -553,18 +571,26 @@ def _kwargs_text(tr, op, extra=()):
     return ", ".join(parts)
 
 
+def _cmt(s) -> str:
+    """Neutralize any spec-derived string interpolated raw into an emitted comment
+    or docstring: newlines/CRs collapse to spaces so nothing can break out of the
+    line, and `\"\"\"` is defanged so it can't close a docstring. Code reaches the
+    pipeline ONLY through the loud `op: expr` hatch — never smuggled via metadata."""
+    return str(s).replace("\r", " ").replace("\n", " ").replace('"""', '”””')
+
+
 def _mapping_comment(m):
     bits = []
     for d in m.get("decisions") or []:
         choice = d.get("choice")
-        seg = f"{d['id']}: {choice}" if choice is not None else d["id"]
-        bits.append(f"{seg} ({d['provenance']})")
+        seg = f"{_cmt(d['id'])}: {_cmt(choice)}" if choice is not None else _cmt(d["id"])
+        bits.append(f"{seg} ({_cmt(d['provenance'])})")
     sent = m.get("sentinels")
     if sent:
-        bits.append(f"sentinels {sent['values']!r} ({sent['provenance']})")
-    src = m.get("source", "(constant)")
+        bits.append(f"sentinels {sent['values']!r} ({_cmt(sent['provenance'])})")
+    src = _cmt(m.get("source", "(constant)"))
     tail = f"  [{'; '.join(bits)}]" if bits else ""
-    return f"    # {m['target']} <- {src}{tail}"
+    return f"    # {_cmt(m['target'])} <- {src}{tail}"
 
 
 def _emit_mapping(m, col, helpers):
@@ -682,7 +708,7 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
     review_block = ""
     if review:
         review_block = ("\nREVIEW REQUIRED — unconfirmed decisions (unattended mode):\n"
-                        + "".join(f"  - {r!r}\n" for r in review))
+                        + "".join(f"  - {_cmt(r)}\n" for r in review))
 
     skip_rules = spec.get("skip_rows") or []
     skip_consts = []
@@ -692,7 +718,8 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
         skip_consts.append(f"{const} = re.compile({rule['pattern']!r})")
         code_id = rule.get("id", "STR-06")
         skip_guards.append(
-            f"    # {code_id}: skip_rows rule on {rule['column']!r} ({rule['provenance']})")
+            f"    # {_cmt(code_id)}: skip_rows rule on {rule['column']!r} "
+            f"({_cmt(rule['provenance'])})")
         skip_guards.append(
             f"    rt.skip_if(None, bool({const}.match(row[{rule['column']!r}] or '')), "
             f"code={code_id!r}, reason={rule.get('reason', '')!r})")
@@ -733,11 +760,11 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
 
     parts = [
         "#!/usr/bin/env python3",
-        f'"""{name} pipeline — GENERATED by etl-spec-compiler {COMPILER_VERSION}. DO NOT EDIT.',
+        f'"""{_cmt(name)} pipeline — GENERATED by etl-spec-compiler {COMPILER_VERSION}. DO NOT EDIT.',
         "",
-        f"Source spec: {spec_filename}",
+        f"Source spec: {_cmt(spec_filename)}",
         f"Spec sha256: {sha}",
-        f"Spec format: {spec['etlspec']} · authored against taxonomy v{spec['taxonomy_version']}",
+        f"Spec format: {_cmt(spec['etlspec'])} · authored against taxonomy v{_cmt(spec['taxonomy_version'])}",
         "",
         "Regenerate (byte-identical for identical spec bytes):",
         f"    python3 compile_spec.py {spec_filename}",

@@ -33,7 +33,7 @@ BOOL_VOCABS = [
     {"y", "n"}, {"yes", "no"}, {"true", "false"}, {"t", "f"}, {"0", "1"}, {"x", ""},
 ]
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-UNICODE_WS_RE = re.compile("[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\u200b\u200c\u200d\u2060]")
+UNICODE_WS_RE = re.compile("[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\u200b\u200c\u200d\u2060\ufeff]")
 MOJIBAKE_RE = re.compile("(Ã[©¨«¢£±³‰€¤¶ºµ]|â€[™œ˜¦“”™]|Â[°£®©±])")
 THOUSANDS_RE = re.compile(r"^-?[$€£¥₹]?\s?\d{1,3}(,\d{3})+(\.\d+)?$")
 CURRENCY_RE = re.compile(r"^\s*[$€£¥₹]")
@@ -122,7 +122,13 @@ def sniff_dialect(text: str, findings: list):
                                     f"delimiter appears to be {delim!r} — confirm",
                                     evidence=f"sniffed from first {len(sample)} chars"))
     except csv.Error:
-        findings.append(finding("STR-01", "ask", "could not sniff dialect — confirm delimiter"))
+        # No delimiter candidate found. A genuine single-column file (no delimiter
+        # in any line) is not a problem — don't raise a spurious STR-01 ask (F8);
+        # only ask when some line actually contains a candidate delimiter.
+        first_lines = sample.splitlines()[:20]
+        if any(any(d in ln for d in ",;\t|") for ln in first_lines):
+            findings.append(finding("STR-01", "ask",
+                                    "could not sniff dialect — confirm delimiter"))
     return delim
 
 
@@ -171,13 +177,16 @@ def detect_preamble(rows: list) -> int:
         if len(body_vals) < 3:
             continue
         if sum(_is_numeric_cell(v) for v in body_vals) / len(body_vals) > 0.9:
+            # Count the lead over the FULL rows list (the caller slices
+            # rows[preamble:]), so a blank separator line between the metadata
+            # block and the data is counted, not skipped (F3).
             lead = 0
-            for r in modal_rows:
-                v = r[ci].strip()
+            for r in rows:
+                v = r[ci].strip() if ci < len(r) else ""
                 if v and _is_numeric_cell(v):
                     break
                 lead += 1
-            if 2 <= lead < len(modal_rows) - 1:
+            if 2 <= lead < len(rows) - 1:
                 return lead
     return 0
 
@@ -227,7 +236,10 @@ def profile_structure(rows: list, findings: list):
                                         f"row {i + 2} looks like a footer/total row — confirm exclusion",
                                         evidence=r[:4]))
             break
-    exact_dupes = sum(n - 1 for n in Counter(map(tuple, data)).values() if n > 1)
+    # STR-05: exclude fully-blank rows (they are STR-06); matches the runtime,
+    # which skips blanks before the duplicate check (F6).
+    nonblank = [r for r in data if any(f.strip() for f in r)]
+    exact_dupes = sum(n - 1 for n in Counter(map(tuple, nonblank)).values() if n > 1)
     if exact_dupes:
         findings.append(finding("STR-05", "ask",
                                 f"{exact_dupes} exact duplicate row(s); default: keep and report",
@@ -363,11 +375,15 @@ def profile_types(name: str, values: list, findings: list):
     # TYP-03 date format ambiguity
     slashy = [v for v in vals if DATE_SLASH_RE.match(v)]
     if slashy and len(slashy) / n > 0.6:
-        sep = next((c for c in "/.-" if c in slashy[0]), "/")
         mdy = dmy = both = bad = 0
         for v in slashy:
-            a, b, _ = v.split(sep)
-            a, b = int(a), int(b)
+            # split each value on ITS OWN separator; a mixed-separator column
+            # must not crash (F1) — non-3-part values just count as bad.
+            parts = re.split(r"[/.\-]", v)
+            if len(parts) != 3:
+                bad += 1
+                continue
+            a, b = int(parts[0]), int(parts[1])
             m_ok, d_ok = a <= 12, b <= 12
             if m_ok and d_ok:
                 both += 1
@@ -427,7 +443,10 @@ def group_findings(findings: list) -> list:
     for f in findings:
         if f["class"] != "ask":
             continue
-        key = (f["id"], f.get("group_key") or f.get("column") or f["id"])
+        # Distinguish by group_key, else column, else the message itself — two
+        # DIFFERENT same-id questions (e.g. duplicate-header vs blank-header
+        # STR-04) must never collapse and drop one (F2). Never guess.
+        key = (f["id"], f.get("group_key") or f.get("column") or f["message"])
         if key not in groups:
             groups[key] = {"id": f["id"], "class": "ask",
                            "group_key": f.get("group_key"),

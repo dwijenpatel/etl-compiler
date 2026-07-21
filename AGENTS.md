@@ -78,6 +78,22 @@ The external evidence corpus backing taxonomy/default decisions is likewise loca
 - **ERR-01 follow-ups DONE (runtime 0.4.0, compiler 0.3.0, spec format 0.3):** `annotate` promoted to a first-class disposition (ERR-01 option c, evidence-backed): content failures NULL the field, ledger `{field, change: NULLED, reason: <taxonomy id>}` to `changes.jsonl` (Airbyte `_airbyte_meta.changes` shape, our vocabulary), aggregate in `summary.annotations_by_type`, row loads, exit 2. STR-02 (structural) and NUL-04 (declared non-nullable) never annotate — they quarantine (the content-vs-movement crux, applied). Unknown disposition = SpecError at compile + RunError at run — no silent fallback. Compiler now emits per-field `FIELD_TRANSFORMS` + `_row_guards` (annotate needs field granularity; quarantine/fail-fast unchanged semantics). `errors.jsonl` records adopt DuckDB `reject_errors` fields: `column_idx` + verbatim `csv_line` (byte offsets deliberately not adopted — stdlib csv exposes none). 107 tests.
 - **Eval iteration 3 DONE (determinism — first separation): skill 4/4 properties, baseline 0/4.** `evals/iteration-3/{results.json,benchmark.md}`; analysis in `docs/eval-report-iteration-3.md` [local-only]. E1 regen×3: skill byte-identical 3/3; baseline 0/3 pipelines/report-schemas (but 3/3 output VALUES — the spec alone pins data; the skill's margin is the operational contract + zero-model regen). E2 authoring×3: skill decision- and output-identical 3/3; baseline 0/3 (dup kept/dropped/kept, ragged padded 3/3, JSON report 1/3). E3 unseen variants: skill 4/4 exact taxonomy codes; a baseline misassigned 2/4 plausible-looking codes. E4 edit: skill 1-line diff + ERR-02 catches a wrong-for-data edit; baseline's clean edit sits on a runtime reading the same budget spec oppositely. **Compiler-coverage limit found:** 2/3 authoring runs hand-generated (ENC-06 repair + STR-06 footer-skip outside compiler vocabulary) — see next steps.
 
+## Code-review backlog (2026-07-21 multi-agent review; deferred, not bugs-in-flight)
+
+- **CSV formula injection (ERR/output).** `_render` writes fields beginning `= + - @`
+  verbatim; opening output.csv in Excel/Sheets executes them. This is a *meaning-changing
+  output transform* with no taxonomy home — do it right: add a taxonomy entry (e.g. ENC-07
+  "spreadsheet formula injection"), an `ask`/policy-gated neutralization (prefix `'`, count
+  it), never a blanket prefix (negatives legitimately lead with `-`). Needs runtime + spec.
+- **Datetime-format detection** in the profiler: `DATE_SLASH_RE` only matches pure dates, so
+  `08.08.2018 00:00` (German datetime) flags no TYP-03/04. Extend detection to date+time.
+- **Report-write atomicity + fsync** (durability, not correctness): reports written
+  non-atomically; a crash mid-`summary.json` truncates it. Route reports through the same
+  temp+replace helper as output.csv.
+- Minor profiler noise deferred: TYP-03 false-positive on dotted version numbers (`1.2.10`);
+  `FOOTER_KEYWORDS` prefix-matching (`Totally`); `rows_profiled` counts preamble/blank rows.
+- Streaming (multi-GB inputs) stays a non-goal (whole-file read); revisit only if needed.
+
 ## Prioritized next steps
 
 1. **Charset detection** for ENC-01: the Latin-1 fallback always "succeeds", so real Shift-JIS (JP corpus files) is mislabeled `latin-1` with mojibake headers. Needs byte-n-gram/chardet-style detection within the stdlib-only constraint.
