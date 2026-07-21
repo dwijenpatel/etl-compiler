@@ -1,0 +1,14 @@
+{
+  "eval_id": 1,
+  "eval_name": "eval-1-ambiguous-dates-no-guessing",
+  "prompt": "Load partner shipment feed (partner_feed.csv) into shipments DDL; every date ambiguous MDY/DMY; 9999 sentinels; carrier case collisions; empty NOT NULL id — unattended.",
+  "assertion_style": "contract-level (iteration-2): machine-readable accounting, not mechanics",
+  "assertions": [
+    "No silent date guess: MDY-vs-DMY interpretation not silently assumed; flagged unconfirmed/for-review",
+    "Ambiguity disposition preserves reprocessability: affected rows quarantined with raw preserved, OR any degraded loading (e.g. NULL dates) is an explicitly recorded reviewable decision in machine-readable form, not just prose",
+    "9999 flagged as suspected sentinel for review, not loaded as real weight silently",
+    "Empty shipment_id row rejected via NOT NULL with a coded, machine-readable error record",
+    "Carrier case collisions (UPS/ups/Ups, FedEx/FEDEX) surfaced: canonicalized with a recorded decision, or flagged",
+    "Accounting completeness: machine-readable report reconciles rows_in vs loaded + quarantined + excluded"
+  ]
+}

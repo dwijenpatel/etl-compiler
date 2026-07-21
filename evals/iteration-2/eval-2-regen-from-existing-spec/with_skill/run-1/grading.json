@@ -1,0 +1,30 @@
+{
+  "expectations": [
+    {
+      "text": "All spec decisions honored: MDY dates rendered ISO, N/A sentinel in dt -> null (not an error), $/comma/parens numeric cleaning, Y/N booleans, leading-zero ZIPs preserved as strings",
+      "passed": true,
+      "evidence": "output.csv verified row-by-row: $2,450.00->2450.00, (75)->-75.00, 01/15/2026->2026-01-15, N/A->empty (counted NUL-03:dt=1, errors.jsonl empty), Y/N->true/false, 02134 preserved"
+    },
+    {
+      "text": "No decisions changed or added: no new cleaning/repair behaviors beyond the spec",
+      "passed": true,
+      "evidence": "etl_runtime.py sha256 identical to skill asset (638e47c3...); pipeline CONFIG mirrors spec policies incl. per-column sentinel; no expr/repair logic in pipeline"
+    },
+    {
+      "text": "Machine-readable reports at all three granularities: per-row error records, per-error-type aggregates, run summary",
+      "passed": true,
+      "evidence": "errors.jsonl (empty, present), summary.json with errors_by_type/warnings_by_type aggregates, manifest.json with input sha + spec hash"
+    },
+    {
+      "text": "Quarantine disposition per spec, with raw rows preserved for reprocessing",
+      "passed": true,
+      "evidence": "error_disposition: quarantine in pipeline CONFIG; runtime quarantine path (raw-row preservation) exercised by shared runtime tests; 0 rows quarantined on this clean sample"
+    },
+    {
+      "text": "Accounting completeness: rows_in reconciles against output + quarantined + excluded in the machine-readable report",
+      "passed": true,
+      "evidence": "summary.json: rows_in=4 = rows_out=4 + quarantined=0 + skipped=0"
+    }
+  ],
+  "summary": {"pass_rate": 1.0, "passed": 5, "failed": 0, "total": 5}
+}

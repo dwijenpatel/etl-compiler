@@ -1,0 +1,2 @@
+source_row,reason,raw_record
+7,shipment_id is empty but target column is NOT NULL,|04/05/2026|22.10|UPS|Y

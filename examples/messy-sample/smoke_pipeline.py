@@ -1,7 +1,7 @@
 """Smoke-test pipeline in exactly the shape codegen would produce.
 
 Run from this directory:  python3 smoke_pipeline.py
-Expected: exit prints 2 (completed with quarantined rows); etl_out/ contains
+Expected: exit code 2 (completed with quarantined rows); etl_out/ contains
 output.csv (6 rows), quarantine.csv (ragged row 7), errors.jsonl, summary.json, manifest.json.
 """
 import os, sys
@@ -34,7 +34,8 @@ def transform_row(row, report):
     out["amount"] = rt.to_decimal(row["amt"], "amt", thousands_sep=",",
                                   currency=True, accounting_negative=True, scale=2)  # TYP-01
     out["order_date"] = rt.to_date(row["order_date"], "order_date", formats=["%m/%d/%Y"])  # TYP-03: MDY (explicit)
-    out["is_active"] = rt.to_bool(row["active"], "active", mapping={"Y": True, "N": False})  # TYP-06
+    out["is_active"] = rt.to_bool(row["active"], "active", mapping={"Y": True, "N": False},
+                                  report=report)  # TYP-06
     out["postal_code"] = rt.check_length(row["zip"], "zip", max_length=10)  # TYP-07: string, TYP-11
     out["notes"] = row["notes"]
     return out
@@ -42,3 +43,4 @@ def transform_row(row, report):
 result = rt.run_pipeline(input_path=os.path.join(os.path.dirname(__file__) or ".", "messy_sample.csv"), out_dir="./etl_out",
                          config=CONFIG, transform_row=transform_row)
 print("exit_code:", result.exit_code)
+sys.exit(result.exit_code)

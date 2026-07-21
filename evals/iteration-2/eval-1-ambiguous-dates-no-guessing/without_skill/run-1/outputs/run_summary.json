@@ -1,0 +1,99 @@
+{
+  "source": "eval-inputs/partner_feed.csv",
+  "target_table": "shipments",
+  "date_format_used": "MM/DD/YYYY (assumed, unconfirmed)",
+  "counters": {
+    "rows_read": 8,
+    "rows_loaded": 7,
+    "rows_rejected": 1,
+    "weight_whitespace_trimmed": 1,
+    "weight_sentinel_nulled": 3,
+    "carrier_canonicalized": 4,
+    "carrier_unknown": 0
+  },
+  "warnings": [
+    {
+      "row": 3,
+      "shipment_id": "SH-0002",
+      "column": "weight_kg",
+      "code": "NUL-sentinel",
+      "detail": "value 9999 treated as missing-value sentinel -> NULL"
+    },
+    {
+      "row": 3,
+      "shipment_id": "SH-0002",
+      "column": "carrier",
+      "code": "case-canon",
+      "detail": "carrier 'ups' -> 'UPS'"
+    },
+    {
+      "row": 4,
+      "shipment_id": "SH-0003",
+      "column": "weight_kg",
+      "code": "STR-trim",
+      "detail": "trimmed surrounding whitespace from ' 8.25 '"
+    },
+    {
+      "row": 5,
+      "shipment_id": "SH-0004",
+      "column": "weight_kg",
+      "code": "NUL-sentinel",
+      "detail": "value 9999 treated as missing-value sentinel -> NULL"
+    },
+    {
+      "row": 5,
+      "shipment_id": "SH-0004",
+      "column": "carrier",
+      "code": "case-canon",
+      "detail": "carrier 'Ups' -> 'UPS'"
+    },
+    {
+      "row": 6,
+      "shipment_id": "SH-0005",
+      "column": "carrier",
+      "code": "case-canon",
+      "detail": "carrier 'FEDEX' -> 'FedEx'"
+    },
+    {
+      "row": 8,
+      "shipment_id": "SH-0007",
+      "column": "weight_kg",
+      "code": "NUL-sentinel",
+      "detail": "value 9999 treated as missing-value sentinel -> NULL"
+    },
+    {
+      "row": 9,
+      "shipment_id": "SH-0008",
+      "column": "carrier",
+      "code": "case-canon",
+      "detail": "carrier 'ups' -> 'UPS'"
+    }
+  ],
+  "review_required": [
+    {
+      "code": "weight-sentinel",
+      "detail": "3 row(s) had weight_kg=9999 treated as missing and loaded as NULL. Confirm 9999 is a sentinel, not a real weight."
+    },
+    {
+      "code": "date-format-ambiguous",
+      "detail": "All dates parsed as MM/DD/YYYY (assumed, unconfirmed). Values are undecidable from data (all components <= 12). Confirm the partner's convention; re-run with %d/%m/%Y if DD/MM/YYYY."
+    }
+  ],
+  "rejected_rows": [
+    {
+      "row": 7,
+      "raw": [
+        "",
+        "04/05/2026",
+        "22.10",
+        "UPS",
+        "Y"
+      ],
+      "reason": "shipment_id is empty but target column is NOT NULL"
+    }
+  ],
+  "outputs": {
+    "loaded_csv": "shipments_loaded.csv",
+    "rejected_csv": "shipments_rejected.csv"
+  }
+}
