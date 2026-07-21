@@ -24,8 +24,9 @@ from collections import Counter
 
 MAX_ROWS_DEFAULT = 1000
 
-KNOWN_SENTINELS = {"n/a", "na", "null", "none", "nil", "-", "--", ".", "?", "#n/a",
-                   "unknown", "(blank)", "missing"}
+KNOWN_SENTINELS = {"n/a", "n.a.", "na", "null", "none", "nil", "-", "--", "---", ".",
+                   "?", "#n/a", "unknown", "(blank)", "(null)", "(none)", "(empty)",
+                   "missing", "not available", "not applicable", "tbd", "xx", "\\n"}
 NUMERIC_SENTINEL_CANDIDATES = {"9999", "99999", "999999", "-1", "0000", "1900-01-01",
                                "1970-01-01", "00000000"}
 BOOL_VOCABS = [
@@ -38,9 +39,12 @@ THOUSANDS_RE = re.compile(r"^-?[$€£¥₹]?\s?\d{1,3}(,\d{3})+(\.\d+)?$")
 CURRENCY_RE = re.compile(r"^\s*[$€£¥₹]")
 PAREN_NEG_RE = re.compile(r"^\(\s*[$€£¥₹]?\s*[\d,._]+\s*\)$")
 PERCENT_RE = re.compile(r"^-?\d+(\.\d+)?%$")
+# Magnitude-suffixed numerics: 10.00K, 1.2M, 3B, $5.4k (NOAA-style scaled strings). TYP-01.
+MAGNITUDE_RE = re.compile(r"^\s*[$€£¥₹]?\s?-?\d+(?:[.,]\d+)?\s?[KkMmBbGgTt]$")
 LEADING_ZERO_RE = re.compile(r"^0\d+$")
 PLAIN_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
-DATE_SLASH_RE = re.compile(r"^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$")
+# Ambiguous D/M dates, separators / - or . (European dotted DD.MM.YYYY included). TYP-03.
+DATE_SLASH_RE = re.compile(r"^\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}$")
 FOOTER_KEYWORDS = re.compile(r"(?i)^(sub)?total|^sum\b|^count\b|^generated|^report|^page \d")
 
 
@@ -60,8 +64,16 @@ def finding(fid, klass, message, column=None, count=None, evidence=None):
 def profile_bytes(raw: bytes, findings: list) -> str:
     encoding = "utf-8"
     if raw.startswith(b"\xef\xbb\xbf"):
-        findings.append(finding("ENC-02", "fix", "UTF-8 BOM present; default: strip"))
-        raw = raw[3:]
+        # Strip every leading UTF-8 BOM: corpus found files carrying two (a BOM
+        # prepended to an already-BOM'd export), which left one contaminating the
+        # first header name.
+        n_bom = 0
+        while raw.startswith(b"\xef\xbb\xbf"):
+            raw = raw[3:]
+            n_bom += 1
+        findings.append(finding("ENC-02", "fix",
+                                f"UTF-8 BOM present (×{n_bom}); default: strip"
+                                if n_bom > 1 else "UTF-8 BOM present; default: strip"))
     elif raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
         findings.append(finding("ENC-01", "ask", "UTF-16 BOM detected — confirm encoding",
                                 evidence="leading bytes " + raw[:2].hex()))
@@ -110,9 +122,72 @@ def sniff_dialect(text: str, findings: list):
     return delim
 
 
+def _is_numeric_cell(v: str) -> bool:
+    return bool(PLAIN_NUMBER_RE.match(v.replace(",", "").replace(" ", "")))
+
+
+def detect_preamble(rows: list) -> int:
+    """STR-06: count leading report-style metadata/title rows above the real data.
+    Two signals, both conservative (require real body rows to remain):
+
+    A. Width break — leading rows narrower than the file's modal width (a title
+       cell above a wide table; the classic Excel-export shape).
+    B. Type-stabilization break — same-width key-value metadata above typed data
+       (the ONS time-series shape): a body column is strongly numeric, and ≥2
+       contiguous leading rows violate that type. The ≥2 threshold keeps an
+       ordinary single text header from being mistaken for preamble."""
+    if len(rows) < 4:
+        return 0
+    widths = Counter(len(r) for r in rows)
+    modal_width, modal_count = widths.most_common(1)[0]
+    if modal_width < 2:
+        return 0
+
+    # Signal A: narrow leading rows.
+    n = 0
+    for r in rows:
+        if len(r) < modal_width and any(f.strip() for f in r):
+            n += 1
+        else:
+            break
+    if 0 < n < len(rows) - 1:
+        return n
+
+    # Signal B: type break in a body column. Scoped to 2-column key-value files —
+    # the metadata-block shape (ONS time series) that signal A can't see because
+    # preamble and data share a width. Wider tables with preamble present narrow
+    # title rows and are handled by signal A; restricting B here avoids mistaking
+    # a formatted-numeric data column (e.g. "$1,234.56", "(500)") for a type break.
+    if modal_width != 2 or modal_count / len(rows) < 0.7:
+        return 0
+    modal_rows = [r for r in rows if len(r) == modal_width]
+    body = modal_rows[len(modal_rows) // 2:]
+    for ci in range(modal_width):
+        body_vals = [r[ci].strip() for r in body if r[ci].strip()]
+        if len(body_vals) < 3:
+            continue
+        if sum(_is_numeric_cell(v) for v in body_vals) / len(body_vals) > 0.9:
+            lead = 0
+            for r in modal_rows:
+                v = r[ci].strip()
+                if v and _is_numeric_cell(v):
+                    break
+                lead += 1
+            if 2 <= lead < len(modal_rows) - 1:
+                return lead
+    return 0
+
+
 def profile_structure(rows: list, findings: list):
     if not rows:
-        return [], []
+        return [], {}
+    preamble = detect_preamble(rows)
+    if preamble:
+        findings.append(finding("STR-06", "ask",
+                                f"{preamble} preamble/metadata row(s) above the header "
+                                "(narrower than the data) — confirm the true header row",
+                                count=preamble, evidence=[r[:4] for r in rows[:preamble]]))
+        rows = rows[preamble:]
     header = rows[0]
     stripped = [h.strip() for h in header]
     if stripped != header:
@@ -219,15 +294,24 @@ def profile_types(name: str, values: list, findings: list):
         return
     n = len(vals)
 
-    # TYP-06 boolean vocabulary
+    # TYP-06 boolean vocabulary. A single distinct value is not evidence of a
+    # boolean column (corpus regression: 9k spurious findings on a wide file of
+    # constant columns) — require two distinct values, or the X/blank checkbox
+    # pattern where the blanks are the second state.
     lowered = {v.casefold() for v in vals}
-    for vocab in BOOL_VOCABS:
-        if lowered <= vocab and len(lowered) >= 1 and vocab != {"0", "1"} or lowered == {"0", "1"}:
+    has_empties = any(v is not None and v.strip() == "" for v in values)
+    if len(lowered) >= 2:
+        for vocab in BOOL_VOCABS:
             if lowered <= vocab:
                 findings.append(finding("TYP-06", "ask",
                                         f"boolean-like vocabulary {sorted(lowered)} — confirm truth mapping",
                                         column=name))
                 return
+    elif lowered == {"x"} and has_empties:
+        findings.append(finding("TYP-06", "ask",
+                                "checkbox pattern (X/blank) — confirm truth mapping (true/false or true/null?)",
+                                column=name))
+        return
 
     # TYP-01 formatted numerics
     fmt_counts = Counter()
@@ -240,6 +324,8 @@ def profile_types(name: str, values: list, findings: list):
             fmt_counts["accounting-negative"] += 1
         if PERCENT_RE.match(v):
             fmt_counts["percent-suffix"] += 1
+        if MAGNITUDE_RE.match(v):
+            fmt_counts["magnitude-suffix"] += 1
     if fmt_counts:
         findings.append(finding("TYP-01", "ask",
                                 "formatted numeric pattern(s) — confirm cleaning rules",
@@ -263,7 +349,7 @@ def profile_types(name: str, values: list, findings: list):
     # TYP-03 date format ambiguity
     slashy = [v for v in vals if DATE_SLASH_RE.match(v)]
     if slashy and len(slashy) / n > 0.6:
-        sep = "/" if "/" in slashy[0] else "-"
+        sep = next((c for c in "/.-" if c in slashy[0]), "/")
         mdy = dmy = both = bad = 0
         for v in slashy:
             a, b, _ = v.split(sep)
@@ -320,7 +406,7 @@ def profile_file(path: str, max_rows: int = MAX_ROWS_DEFAULT) -> dict:
     findings: list = []
     raw = open(path, "rb").read()
     encoding = profile_bytes(raw, findings)
-    if raw.startswith(b"\xef\xbb\xbf"):
+    while raw.startswith(b"\xef\xbb\xbf"):  # strip every leading BOM (see profile_bytes)
         raw = raw[3:]
     text = raw.decode(encoding, errors="replace")
     text = profile_text(text, findings)
