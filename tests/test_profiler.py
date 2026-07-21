@@ -82,11 +82,10 @@ class TestCorpusDetectionGaps(unittest.TestCase):
         self.assertNotIn("﻿", result["columns"][0])
         self.assertEqual(result["columns"][0], "Licence Number")
 
-    def test_typ01_magnitude_suffix_numeric_detected(self):
-        # NOAA storm events store damage as "10.00K", "1.20M" — magnitude
-        # suffixes TYP-01 did not recognize.
+    def test_typ12_magnitude_suffix_numeric_detected(self):
+        # NOAA storm events store damage as "10.00K", "1.20M" — its own entry TYP-12.
         text = "event,damage\na,10.00K\nb,1.20M\nc,0.00K\nd,250.00K\n"
-        self.assertIn("TYP-01", _ids(_profile_text(text)))
+        self.assertIn("TYP-12", _ids(_profile_text(text)))
 
 
 class TestTyp06Boolean(unittest.TestCase):

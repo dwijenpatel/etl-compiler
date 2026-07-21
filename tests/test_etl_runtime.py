@@ -89,6 +89,17 @@ class TestCoercers(unittest.TestCase):
     def test_typ01_percent_to_fraction(self):
         self.assertEqual(rt.to_decimal("12%", "pct", percent=True), Decimal("0.12"))
 
+    def test_typ12_magnitude_suffix_scales(self):
+        # TYP-12: NOAA-style scaled strings. Only applied when the spec confirms it.
+        self.assertEqual(rt.to_decimal("10.00K", "damage", magnitude=True), Decimal("10000.00"))
+        self.assertEqual(rt.to_decimal("1.2M", "damage", magnitude=True), Decimal("1200000"))
+        self.assertEqual(rt.to_decimal("0.00K", "damage", magnitude=True), Decimal("0.00"))
+
+    def test_typ12_magnitude_not_applied_by_default(self):
+        # Without the flag a trailing letter is a parse error, never silently dropped.
+        with self.assertRaises(rt.RowError):
+            rt.to_decimal("10.00K", "damage")
+
     def test_typ01_garbage_raises_row_error(self):
         with self.assertRaises(rt.RowError) as ctx:
             rt.to_decimal("abc", "amt")

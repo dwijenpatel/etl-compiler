@@ -45,7 +45,7 @@ policies:                         # dataset-level; taxonomy IDs in comments
   datetime_rendering: {value: iso8601, provenance: default}         # TYP-05
   error_disposition: {value: quarantine, provenance: default}       # ERR-01
   error_budget: {value: {percent: 5, min_rows: 100}, provenance: default}  # ERR-02
-  duplicate_rows: {value: keep, provenance: default}                # STR-05
+  duplicate_rows: {value: keep, provenance: default}                # STR-05: keep | drop_exact
 
 mappings:                         # one entry per target column
   - target: order_id

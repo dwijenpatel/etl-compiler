@@ -24,6 +24,8 @@ import etl_runtime as rt
 # ---- Resolved configuration (from <name>.etlspec.yaml — edit the spec, not this) ----
 CONFIG = {
     "name": "vendor_orders",
+    "spec_version": "0.1",                  # etlspec format version (manifest, ERR-06)
+    "generator_version": "etl-generator/0.1",  # what generated this pipeline (ERR-06)
     "encoding": "utf-8",
     "delimiter": ",",
     "expected_columns": ["order_id", "cust_name", "amt", "dt", "active", "zip"],
@@ -48,7 +50,8 @@ def transform_row(row, rt_ctx):
     # order_date <- dt  [TYP-03: MDY — explicit user decision; sentinels: N/A]
     out["order_date"] = rt.to_date(row["dt"], "dt", formats=["%m/%d/%Y"])
     # is_active <- active  [TYP-06: Y/N vocabulary — detected-confirmed]
-    out["is_active"] = rt.to_bool(row["active"], "active", mapping={"Y": True, "N": False})
+    out["is_active"] = rt.to_bool(row["active"], "active",
+                                  mapping={"Y": True, "N": False}, report=rt_ctx)
     # postal_code <- zip  [TYP-07: string, leading zeros present]
     out["postal_code"] = rt.check_length(row["zip"], "zip", max_length=10)
     return out
@@ -76,7 +79,7 @@ if __name__ == "__main__":
 - **Per-column null sentinels** go in `CONFIG["policies"]["sentinels"]` as `{"dt": ["N/A"]}` — the runtime applies them during null resolution, before `transform_row` is called.
 - **Nullable targets:** if the spec says a target is nullable and the value is None after null resolution, just pass it through — runtime coercers all pass None through untouched. Only call `rt.not_null` for `nullable: false` targets.
 - **Custom expressions** (`op: expr`) become small local functions with the spec's expression inline and a loud comment. They are the only place non-runtime logic is allowed.
-- **Exit codes** (from the runtime): 0 = clean run; 1 = run-level failure (encoding failure, missing columns, error budget exceeded — no output written); 2 = completed with quarantined rows (output + quarantine + reports written). CI can distinguish "clean", "investigate", "broken".
+- **Exit codes** (from the runtime): 0 = clean run; 1 = run-level failure (encoding failure, missing columns, error budget exceeded — no output written, but summary/manifest/error reports ARE written with `run_error` set); 2 = completed with quarantined rows (output + quarantine + reports written). CI can distinguish "clean", "investigate", "broken".
 - **Determinism:** no randomness, no wall-clock-dependent logic in transforms (the manifest timestamps the run; transforms themselves must be pure).
 
 ## Runtime API quick reference
@@ -86,15 +89,15 @@ Text/null (applied automatically by `run_pipeline` per policy — you rarely cal
 
 Coercers (all pass `None` through; all raise `rt.RowError` with a taxonomy code on failure):
 - `to_int(v, col, *, thousands_sep=None, currency=False, accounting_negative=False)`
-- `to_decimal(v, col, *, thousands_sep=None, currency=False, accounting_negative=False, percent=False, scale=None)` — TYP-01/02/08
+- `to_decimal(v, col, *, thousands_sep=None, currency=False, accounting_negative=False, percent=False, magnitude=False, scale=None)` — TYP-01/02/08/12; `magnitude=True` applies confirmed K/M/B/G/T scale suffixes (TYP-12), never by default
 - `to_date(v, col, *, formats)` / `to_datetime(v, col, *, formats, assume_tz=None, to_utc=True)` — TYP-03/04
 - `format_datetime(v, col, *, fmt=ISO8601)` — TYP-05
-- `to_bool(v, col, *, mapping)` — TYP-06
+- `to_bool(v, col, *, mapping, report=None)` — TYP-06; pass the transform's report arg so case-insensitive acceptances are counted (TYP-10, per ERR-04)
 - `check_length(v, col, *, max_length)` — TYP-11
 - `not_null(v, col)` — NUL-04
 - `check_range(v, col, *, min=None, max=None)` — TYP-09
 
 Driver:
-- `run_pipeline(input_path, out_dir, config, transform_row) -> RunResult` — handles ENC-01/02, STR-02/07, KEY-02/03, ERR-01/02/03/05/06; writes `output.csv`, `quarantine.csv`, `errors.jsonl`, `summary.json`, `manifest.json`.
+- `run_pipeline(input_path, out_dir, config, transform_row) -> RunResult` — handles ENC-01/02, STR-02/05/07, KEY-02/03, ERR-01/02/03/05/06; writes `output.csv`, `quarantine.csv`, `errors.jsonl`, `summary.json`, `manifest.json`. Exact duplicates are kept-and-reported by default (`policies.duplicate_rows: keep`); `drop_exact` drops them, counted.
 
 If a transform the spec needs has no runtime function, add it to the runtime (with taxonomy ID comments and a docstring), not to the pipeline — and tell the user the runtime gained a function, since it's the shared, tested artifact.

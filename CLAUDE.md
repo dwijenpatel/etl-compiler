@@ -54,16 +54,26 @@ evals/
 - Eval iteration 1 (3 tasks × with-skill/baseline, subagent runs, graded): **with-skill 20/20 assertions, baseline 19/20.** Full analysis in `docs/eval-report-iteration-1.md`. Key insight: the model writes good ETL unaided, so the skill's value is contract-level (machine-readable accounting completeness, quarantine-not-pad, keep-duplicates-by-default, repair-as-opt-in), which iteration-1 assertions only partially priced in.
 - Skill packaging: the skill dir zips into a `.skill` (in Claude Code: `python -m scripts.package_skill` from the skill-creator skill, or just zip the folder).
 
+### Session 2026-07-20 (crash-recovered): runtime hardening + taxonomy validation
+
+- **Runtime v0.2.0** (`etl_runtime.py`): trims now counted (TYP-10/NUL-02, ERR-04); `to_bool` casefold acceptances counted; manifest carries `spec_version`/`spec_sha256`/`generator_version` (ERR-06); **STR-05 exact-duplicate detection** (keep-and-report default, `drop_exact` explicit); run-errors return exit 1 *with* reports (ERR-05, was bare traceback); `to_decimal(magnitude=True)` for TYP-12. Backed by `tests/test_etl_runtime.py` (real unit suite — the "tested runtime" premise is now fact, not aspiration).
+- **Taxonomy v0.2** (both copies synced): added **TYP-12** (magnitude/scale-suffixed numerics). Validation done via a real corpus, NOT the 5-file plan — see below.
+- **Taxonomy validation** (`docs/taxonomy-validation-report.md` — READ THIS before taxonomy work): 3 evidence streams — (A) profiler audit over 244 real files (`corpus/`, reproducible), (B) literature/incidents + (D) 15-tool census, both in the **evidence corpus at `~/repos/etl-evidence`** (evidence-kit format, retrieval-grade). Findings: taxonomy *categories* held up (no entry unused, one gap closed as TYP-12, rest deferred as not-yet-finite); the *profiler* was the weak link (6 detection bugs found + fixed + tested: empty-file crash, TYP-06 over-fire, STR-06 preamble, TYP-03 dotted dates, NUL-03 sentinels, ENC-02 doubled-BOM).
+- **Open default question**: no surveyed tool defaults to row-quarantine (ERR-01). Flagged for a dedicated adversarial-grade pass before any change — do NOT change ERR-01 on current (retrieval-grade) evidence.
+- **Eval iteration 2**: 6 runs executed + archived under `evals/iteration-2/` but **NOT graded** — they predate the v0.2 profiler/runtime changes. Regenerate, don't grade as-is. Also: baseline arm needs strong isolation (a baseline subagent copied the skill runtime verbatim until told not to read the repo).
+
 ## Prioritized next steps
 
-1. **Eval iteration 2** with discriminating, contract-level assertions (drafted in `docs/eval-report-iteration-1.md`): machine-readable accounting must cover EVERY modified/dropped/padded row; duplicate rows kept-and-reported by default; quarantine preserves raw rows for reprocessing; mojibake repair is opt-in. Rerun with-skill + baseline, compare to iteration 1.
-2. **Taxonomy validation** against 5 genuinely messy real-world files (plan is in `docs/taxonomy.md` § Validation Plan). Every observed problem should map to an ID; unmapped problems become new entries.
-3. **Deterministic compiler**: today codegen is Claude following `references/codegen-guide.md`. Build `spec → pipeline.py` as an actual script (template/AST-based) so regeneration is byte-deterministic without a model in the loop. This was always the intended end-state.
-4. **Extract the runtime into a proper package** (`pip install etl-solved-runtime` or similar) with a real unit-test suite — today it's copied per-project from skill assets, tested only via the smoke example and evals.
-5. **Profiler refinements**: batch NUL-01 into one dataset-level question (currently asks per column); exclude suspected footer rows from per-column stats (footer empties currently inflate NUL-01 counts); TYP-06 single-value column edge cases.
-6. **Skill description trigger optimization** (skill-creator's `run_loop.py`, available in Claude Code) — not yet run.
-7. **TypeScript runtime + target** (PRD P0 originally; now sequenced after the Python path is solid).
-8. **SQL/dbt target** — the analyst-serving surface (see brainstorm-log: analysts author specs; SQL is their runtime).
+1. **Adversarial-grade evidence pass on ERR-01** (quarantine default) — the one load-bearing default question the validation raised. Run in `~/repos/etl-evidence` (evidence-kit Operation 2, adversarial); only then is a default change defensible.
+2. **Interview batching** (SKILL.md + profiler): homogeneous per-column `ask` findings must be grouped into one dataset-level question (corpus showed 9k TYP-06 questions on a wide file). Generalizes the NUL-01 batching note.
+3. **Rerun eval iteration 2** against the v0.2 profiler/runtime (archived runs predate it) with the contract-level assertions in `evals/iteration-2/*/eval_metadata.json`; strong baseline isolation (see note above).
+4. **Deterministic compiler**: today codegen is Claude following `references/codegen-guide.md`. Build `spec → pipeline.py` as an actual script (template/AST-based) so regeneration is byte-deterministic without a model in the loop. This was always the intended end-state.
+5. **Charset detection** for ENC-01: the Latin-1 fallback always "succeeds", so real Shift-JIS (JP corpus files) is mislabeled `latin-1` with mojibake headers. Needs byte-n-gram/chardet-style detection within the stdlib-only constraint.
+6. **Extract the runtime into a proper package** (`pip install etl-solved-runtime`) — the unit-test suite now exists (`tests/`), so packaging is the remaining step.
+7. **Deterministic compiler** (see #4 above — now the intended end-state after the taxonomy stabilizes).
+8. **TypeScript runtime + target**; **SQL/dbt target** (analyst-serving surface). Sequenced after the Python path is solid.
+
+Runtime/profiler test suite lives in `tests/` (`python3 -m unittest discover -s tests`) — 55 tests, keep it green. Corpus audit: `python3 corpus/audit.py` after profiler changes.
 
 ## Things to NOT do
 

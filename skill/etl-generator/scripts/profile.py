@@ -324,12 +324,18 @@ def profile_types(name: str, values: list, findings: list):
             fmt_counts["accounting-negative"] += 1
         if PERCENT_RE.match(v):
             fmt_counts["percent-suffix"] += 1
-        if MAGNITUDE_RE.match(v):
-            fmt_counts["magnitude-suffix"] += 1
     if fmt_counts:
         findings.append(finding("TYP-01", "ask",
                                 "formatted numeric pattern(s) — confirm cleaning rules",
                                 column=name, evidence=dict(fmt_counts)))
+
+    # TYP-12 magnitude/scale-suffixed numerics (10.00K, 1.2M) — its own decision.
+    mag = [v for v in vals if MAGNITUDE_RE.match(v)]
+    if mag and len(mag) / n > 0.3:
+        suffixes = Counter(v.strip()[-1].upper() for v in mag)
+        findings.append(finding("TYP-12", "ask",
+                                "magnitude/scale suffix(es) (e.g. K/M/B) — confirm SI scaling",
+                                column=name, count=len(mag), evidence=dict(suffixes)))
 
     # TYP-07 numeric-looking identifiers
     digit_vals = [v for v in vals if v.isdigit()]

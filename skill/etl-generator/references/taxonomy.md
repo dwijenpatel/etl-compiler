@@ -1,9 +1,17 @@
 # ETL Failure-Mode Taxonomy
 
-**Version:** 0.1 (draft)
+**Version:** 0.2 (draft)
 **Status:** Founding artifact for `etl-generator`
 **Author:** Dwijen Patel
-**Date:** July 17, 2026
+**Date:** July 17, 2026 (v0.1); July 20, 2026 (v0.2)
+
+**Changelog**
+- **v0.2** (2026-07-20, minor — additions only, no default changed): added **TYP-12**
+  (magnitude/scale-suffixed numerics), from the corpus validation pass (NOAA damage
+  fields). Validation findings, coverage gaps, and open default-change proposals are in
+  [taxonomy-validation-report.md](taxonomy-validation-report.md). External evidence corpus:
+  `~/repos/etl-evidence`.
+- **v0.1** (2026-07-17): founding taxonomy, 40 entries.
 
 ---
 
@@ -261,6 +269,13 @@ Each entry has: **ID** (stable, used as runtime error/warning code), **What** (t
 - Options: (a) row-error; (b) explicit truncate-with-count; (c) run-error.
 - Default: (a) quarantine. Truncation only as an explicit, counted choice.
 - Class: `row-error`.
+
+**TYP-12 · Magnitude/scale-suffixed numerics**
+- What: Numbers carrying a magnitude suffix — `10.00K`, `1.2M`, `3B` — where the letter is a scale factor, not text. Left unhandled, the column won't parse as numeric; guessed wrong (K=1000 vs K=1024, or a real trailing letter that isn't a scale) it silently mis-scales every value. Observed in NOAA Storm Events damage fields (`corpus/`).
+- Detect: Column values matching `<number><K|M|B|G|T>` (optionally currency-prefixed) above a frequency threshold.
+- Options: (a) parse with a confirmed suffix→exponent map (decimal SI: K=10³, M=10⁶, B/G=10⁹, T=10¹²); (b) keep as string; (c) row-error on the suffix.
+- Default: **always ask** — propose (a) with the detected suffixes and the SI interpretation shown, confirm. The suffix set and their meaning are declared in the spec; unconfirmed suffixes at runtime are row-errors. Never applied by default: a trailing letter may be a unit, a grade, or a typo, and mis-scaling is silent corruption.
+- Class: `ask` at spec time; `row-error` at runtime for unmapped suffixes.
 
 ---
 
