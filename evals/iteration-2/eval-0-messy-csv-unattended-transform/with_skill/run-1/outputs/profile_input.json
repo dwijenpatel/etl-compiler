@@ -28,35 +28,40 @@
       "class": "ask",
       "message": "1 empty value(s) — null or empty string?",
       "column": "active",
-      "count": 1
+      "count": 1,
+      "group_key": "empty-is-null"
     },
     {
       "id": "NUL-01",
       "class": "ask",
       "message": "1 empty value(s) — null or empty string?",
       "column": "customer",
-      "count": 1
+      "count": 1,
+      "group_key": "empty-is-null"
     },
     {
       "id": "NUL-01",
       "class": "ask",
       "message": "2 empty value(s) — null or empty string?",
       "column": "notes",
-      "count": 2
+      "count": 2,
+      "group_key": "empty-is-null"
     },
     {
       "id": "NUL-01",
       "class": "ask",
       "message": "1 empty value(s) — null or empty string?",
       "column": "order_date",
-      "count": 1
+      "count": 1,
+      "group_key": "empty-is-null"
     },
     {
       "id": "NUL-01",
       "class": "ask",
       "message": "1 empty value(s) — null or empty string?",
       "column": "zip",
-      "count": 1
+      "count": 1,
+      "group_key": "empty-is-null"
     },
     {
       "id": "NUL-03",
@@ -65,7 +70,8 @@
       "column": "notes",
       "evidence": {
         "N/A": 1
-      }
+      },
+      "group_key": "sentinel:N/A"
     },
     {
       "id": "STR-05",
@@ -108,7 +114,8 @@
       "id": "TYP-06",
       "class": "ask",
       "message": "boolean-like vocabulary ['n', 'y'] — confirm truth mapping",
-      "column": "active"
+      "column": "active",
+      "group_key": "bool:n,y"
     },
     {
       "id": "TYP-07",
@@ -118,7 +125,8 @@
       "count": 1,
       "evidence": [
         "02134"
-      ]
+      ],
+      "group_key": "leading-zero"
     },
     {
       "id": "STR-02",
@@ -189,8 +197,136 @@
       }
     }
   ],
+  "interview_groups": [
+    {
+      "id": "ENC-06",
+      "class": "ask",
+      "group_key": null,
+      "message": "likely mojibake (prior mis-decode); repair is opt-in",
+      "columns": [
+        "customer"
+      ],
+      "evidence": {
+        "customer": [
+          "JosÃ© GarcÃ­a"
+        ]
+      },
+      "n_columns": 1
+    },
+    {
+      "id": "NUL-01",
+      "class": "ask",
+      "group_key": "empty-is-null",
+      "message": "1 empty value(s) — null or empty string?",
+      "columns": [
+        "active",
+        "customer",
+        "notes",
+        "order_date",
+        "zip"
+      ],
+      "n_columns": 5
+    },
+    {
+      "id": "NUL-03",
+      "class": "ask",
+      "group_key": "sentinel:N/A",
+      "message": "possible sentinel value(s) — confirm which mean null",
+      "columns": [
+        "notes"
+      ],
+      "evidence": {
+        "notes": {
+          "N/A": 1
+        }
+      },
+      "n_columns": 1
+    },
+    {
+      "id": "STR-05",
+      "class": "ask",
+      "group_key": null,
+      "message": "1 exact duplicate row(s); default: keep and report",
+      "columns": [],
+      "n_columns": 0
+    },
+    {
+      "id": "STR-06",
+      "class": "ask",
+      "group_key": null,
+      "message": "row 10 looks like a footer/total row — confirm exclusion",
+      "columns": [],
+      "evidence": {
+        "<dataset>": [
+          "Total",
+          "",
+          "3222.56",
+          ""
+        ]
+      },
+      "n_columns": 0
+    },
+    {
+      "id": "TYP-01",
+      "class": "ask",
+      "group_key": null,
+      "message": "formatted numeric pattern(s) — confirm cleaning rules",
+      "columns": [
+        "amt"
+      ],
+      "evidence": {
+        "amt": {
+          "thousands-separators": 1,
+          "currency-symbol": 1,
+          "accounting-negative": 1
+        }
+      },
+      "n_columns": 1
+    },
+    {
+      "id": "TYP-03",
+      "class": "ask",
+      "group_key": null,
+      "message": "date format fully ambiguous (6 values parse as both MDY and DMY) — must confirm",
+      "columns": [
+        "order_date"
+      ],
+      "evidence": {
+        "order_date": {
+          "ambiguous": 6
+        }
+      },
+      "n_columns": 1
+    },
+    {
+      "id": "TYP-06",
+      "class": "ask",
+      "group_key": "bool:n,y",
+      "message": "boolean-like vocabulary ['n', 'y'] — confirm truth mapping",
+      "columns": [
+        "active"
+      ],
+      "n_columns": 1
+    },
+    {
+      "id": "TYP-07",
+      "class": "ask",
+      "group_key": "leading-zero",
+      "message": "leading zeros present — keep as string to avoid data loss",
+      "columns": [
+        "zip"
+      ],
+      "evidence": {
+        "zip": [
+          "02134"
+        ]
+      },
+      "n_columns": 1
+    }
+  ],
   "summary": {
     "ask": 13,
+    "ask_questions": 9,
     "fix": 8,
     "row-error": 1
   }

@@ -1,0 +1,19 @@
+{
+  "runtime_version": "0.2.0",
+  "expectations": [
+    {"text": "No silent date guess: MDY-vs-DMY not silently assumed; flagged unconfirmed/for-review", "passed": true,
+     "evidence": "did NOT guess at all — empty confirmed-format list, all 7 dates quarantined as TYP-03, decision marked unconfirmed in spec review_required"},
+    {"text": "Ambiguity disposition preserves reprocessability: quarantine w/ raw OR degraded loading recorded reviewable", "passed": true,
+     "evidence": "strongest form: 7 date rows quarantined with raw preserved in quarantine.csv; re-run path = confirm format in spec + regenerate"},
+    {"text": "9999 flagged as suspected sentinel, not loaded as real weight silently", "passed": true,
+     "evidence": "NUL-03 unconfirmed in spec; quarantined not loaded (masked this run by the date guard firing first; verified fires on isolation)"},
+    {"text": "Empty shipment_id rejected via NOT NULL with a coded, machine-readable error record", "passed": true,
+     "evidence": "errors.jsonl {error_code: NUL-04, column: ship_id} — STABLE TAXONOMY CODE (vs baseline ad-hoc MISSING_REQUIRED); raw in quarantine.csv"},
+    {"text": "Carrier case collisions surfaced: canonicalized w/ recorded decision, or flagged", "passed": true,
+     "evidence": "TYP-10 flagged, case preserved (not canonicalized), unconfirmed in review_required"},
+    {"text": "Accounting completeness: report reconciles rows_in vs loaded + quarantined + excluded", "passed": true,
+     "evidence": "summary rows_in=8 = rows_out=0 + rows_quarantined=8; errors_by_type {NUL-04:ship_id=1, TYP-03:date=7}"}
+  ],
+  "summary": {"pass_rate": 1.0, "passed": 6, "failed": 0, "total": 6},
+  "notes": "6/6, same as baseline — but OPPOSITE disposition. Skill quarantines ALL 8 (0 loaded, everything reprocessable, nothing reinterpreted); baseline LOADS 7 under assumed MDY + flags. Both pass 'don't guess'. Two contract edges the assertions do NOT price: (1) stable taxonomy error codes (NUL-04/TYP-03) vs baseline's ad-hoc strings — matters for cross-pipeline monitoring; (2) the disposition is spec-driven and deterministic (regenerate -> identical), where the baseline's is a one-run judgment. Product question surfaced: quarantine-everything (0 rows out) may be too conservative for some unattended contexts vs load-and-flag; relates to the ERR-01 disposition analysis."
+}

@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 RUNTIME_VERSION = "0.2.0"
-TAXONOMY_VERSION = "0.1"
+TAXONOMY_VERSION = "0.2"
 ISO8601_DATE = "%Y-%m-%d"
 ISO8601_DATETIME = "%Y-%m-%dT%H:%M:%S%z"
 
@@ -126,12 +126,6 @@ class RunResult:
 # Text cleaning (ENC-03 / ENC-04 / ENC-05) and null resolution (NUL-01/02/03)
 # ---------------------------------------------------------------------------
 
-# ENC-06: signature of double-encoded UTF-8 — a UTF-8 lead byte (0xC2-0xF4) that was
-# mis-decoded as Latin-1/CP1252 (so it shows as U+00C2-U+00F4) immediately followed by
-# a continuation byte (0x80-0xBF, shown as U+0080-U+00BF). Requiring the continuation
-# char is what keeps ordinary accented text (é, ñ followed by ASCII) from matching.
-_MOJIBAKE_SIG_RE = re.compile("[Â-ô][-¿]")
-
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 # Unicode whitespace variants -> ASCII space; zero-width & BOM chars -> removed. (ENC-05)
 _UNICODE_SPACE_RE = re.compile(
@@ -166,31 +160,6 @@ def clean_text(value: str | None, column: str, report: RunReport | None,
     return v
 
 
-def repair_mojibake(value, column: str, report: RunReport | None = None) -> str | None:
-    """ENC-06: repair prior double-encoded-UTF-8 damage (e.g. 'JosÃ©' -> 'José').
-
-    Opt-in per the taxonomy (repair is heuristic; running it on non-mojibake can
-    corrupt data), so pipelines call this only for columns the spec marks for repair.
-    It is conservative: it acts only on values that carry the double-encoding
-    signature and whose latin-1->utf-8 round-trip succeeds; anything else passes
-    through untouched. Every actual repair is counted as a warning (ERR-04).
-    """
-    if value is None:
-        return None
-    v = str(value)
-    if not _MOJIBAKE_SIG_RE.search(v):
-        return v
-    try:
-        repaired = v.encode("latin-1").decode("utf-8")
-    except (UnicodeEncodeError, UnicodeDecodeError):
-        return v  # not repairable this way — never guess further; leave as-is
-    if repaired != v:
-        if report:
-            report.warn(column, "ENC-06")
-        return repaired
-    return v
-
-
 def resolve_null(value: str | None, column: str, report: RunReport | None,
                  *, trim: bool = True, empty_is_null: bool = True,
                  sentinels: tuple[str, ...] = ()) -> str | None:
@@ -215,17 +184,52 @@ def resolve_null(value: str | None, column: str, report: RunReport | None,
     return v
 
 
+# ENC-06: mojibake repair (opt-in). A previous pipeline decoded UTF-8 bytes with
+# the wrong codec (latin-1/cp1252) and re-saved, leaving signature sequences like
+# "Ã©" for "é" or "â€™" for "'". Repair reverses that: re-encode the text as
+# latin-1 to recover the original bytes, then decode them as UTF-8.
+# Applied ONLY when the spec opts in for a column, and ONLY to values that carry
+# the mojibake signature and round-trip cleanly — heuristic repair of clean text
+# corrupts it, which is why ENC-06's house default is pass-through-and-flag.
+# Signature: a 2-byte-UTF-8 lead byte mis-decoded to U+00C2..U+00DF followed by a
+# continuation byte mis-decoded to U+0080..U+00BF.
+_MOJIBAKE_SIGNATURE_RE = re.compile("[\u00c2-\u00df][\u0080-\u00bf]")
+
+
+def repair_mojibake(value, column: str, report: RunReport | None = None,
+                    *, normalization: str = "NFC") -> str | None:
+    """ENC-06: reverse a prior UTF-8/latin-1 mis-decode. Counts every repair."""
+    if value is None:
+        return None
+    s = str(value)
+    if not _MOJIBAKE_SIGNATURE_RE.search(s):
+        return s  # no signature -> not mojibake, never touch clean text
+    try:
+        repaired = s.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return s  # not cleanly reversible -> leave as-is rather than corrupt
+    if normalization:
+        repaired = unicodedata.normalize(normalization, repaired)
+    if repaired != s and report is not None:
+        report.warn(column, "ENC-06")
+    return repaired
+
+
 # ---------------------------------------------------------------------------
 # Coercers (TYP-*). All pass None through. All raise RowError on failure.
 # ---------------------------------------------------------------------------
 
 _PAREN_NEG_RE = re.compile(r"^\((.*)\)$")
 _CURRENCY_RE = re.compile(r"^[\s]*[$€£¥₹]")
+# TYP-12: magnitude/scale suffixes (10.00K, 1.2M). Applied only when the spec confirms it.
+_MAGNITUDE = {"k": 3, "m": 6, "b": 9, "g": 9, "t": 12}
 
 
 def _clean_numeric_string(v: str, column: str, *, thousands_sep, currency,
-                          accounting_negative, percent) -> tuple[str, bool]:
-    """TYP-01: apply confirmed numeric-cleaning rules. Returns (cleaned, is_percent_applied)."""
+                          accounting_negative, percent, magnitude=False
+                          ) -> tuple[str, bool, int]:
+    """TYP-01/TYP-12: apply confirmed numeric-cleaning rules.
+    Returns (cleaned, is_percent_applied, magnitude_exponent)."""
     s = v.strip()
     negative = False
     if accounting_negative:
@@ -242,20 +246,24 @@ def _clean_numeric_string(v: str, column: str, *, thousands_sep, currency,
     if percent and s.endswith("%"):
         s = s[:-1].strip()
         is_pct = True
+    exp = 0
+    if magnitude and s and s[-1].lower() in _MAGNITUDE:  # TYP-12
+        exp = _MAGNITUDE[s[-1].lower()]
+        s = s[:-1].strip()
     if thousands_sep:
         s = s.replace(thousands_sep, "")
     if negative and not s.startswith("-"):
         s = "-" + s
-    return s, is_pct
+    return s, is_pct, exp
 
 
 def to_int(value, column: str, *, thousands_sep=None, currency=False,
            accounting_negative=False) -> int | None:
     if value is None:
         return None
-    s, _ = _clean_numeric_string(str(value), column, thousands_sep=thousands_sep,
-                                 currency=currency, accounting_negative=accounting_negative,
-                                 percent=False)
+    s, _, _ = _clean_numeric_string(str(value), column, thousands_sep=thousands_sep,
+                                    currency=currency, accounting_negative=accounting_negative,
+                                    percent=False)
     try:
         return int(s)
     except ValueError:
@@ -263,16 +271,19 @@ def to_int(value, column: str, *, thousands_sep=None, currency=False,
 
 
 def to_decimal(value, column: str, *, thousands_sep=None, currency=False,
-               accounting_negative=False, percent=False, scale=None) -> Decimal | None:
+               accounting_negative=False, percent=False, magnitude=False,
+               scale=None) -> Decimal | None:
     if value is None:
         return None
-    s, is_pct = _clean_numeric_string(str(value), column, thousands_sep=thousands_sep,
-                                      currency=currency, accounting_negative=accounting_negative,
-                                      percent=percent)
+    s, is_pct, exp = _clean_numeric_string(str(value), column, thousands_sep=thousands_sep,
+                                           currency=currency, accounting_negative=accounting_negative,
+                                           percent=percent, magnitude=magnitude)
     try:
         d = Decimal(s)
     except InvalidOperation:
         raise RowError("TYP-01", column, value, "not parseable as decimal")
+    if exp:  # TYP-12: apply confirmed magnitude suffix
+        d = d.scaleb(exp)
     if is_pct:
         d = d / Decimal(100)
     if scale is not None:

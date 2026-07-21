@@ -1,3 +1,0 @@
-source_line,reason,raw_row
-9,blank line,[]
-10,non-data row (order_id not an 8-digit id),"[""Total"", """", ""3222.56"", """", """", """", """"]"

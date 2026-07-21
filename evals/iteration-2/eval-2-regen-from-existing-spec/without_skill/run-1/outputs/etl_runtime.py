@@ -1,222 +1,174 @@
-"""etl_runtime.py — shared, stdlib-only edge-case runtime for generated ETL pipelines.
+"""etl_runtime.py — self-contained edge-case runtime for the vendor_orders pipeline.
 
-This is the single place where edge-case semantics live. Generated pipelines are
-thin orchestration that import these primitives. Every coded failure/warning uses a
-taxonomy-style ID (ENC/STR/NUL/TYP/KEY/ERR) so error codes in output == taxonomy IDs.
+Written from scratch for this task. Stdlib-only. Every edge-case semantic lives here so
+the generated pipeline stays thin orchestration. Error/warning codes are taxonomy IDs.
 
-Written from scratch for the vendor_orders regeneration task; stdlib only.
+Taxonomy IDs referenced:
+  TYP-01  numeric/currency formatting (strip $, thousands sep, accounting negative)
+  TYP-03  ambiguous date order (resolved to MDY per spec)
+  TYP-06  boolean vocabulary (Y/N)
+  TYP-07  type ambiguity resolved to string (preserve leading zeros)
+  NUL-03  sentinel values -> null
+  ERR-04  auto-fixes are counted, never silent
 """
 
-from __future__ import annotations
-
-import re
 import unicodedata
-from collections import defaultdict
-from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 
-# ---------------------------------------------------------------------------
-# Errors
-# ---------------------------------------------------------------------------
-class TransformError(Exception):
-    """A row-level, coded conversion failure. `code` is a taxonomy ID."""
+class CellError(Exception):
+    """Raised when a cell cannot be coerced. `code` is a taxonomy ID."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code, message):
         super().__init__(message)
         self.code = code
         self.message = message
 
 
 # ---------------------------------------------------------------------------
-# Fix accounting (ERR-04: auto-fixes are counted, per column per taxonomy ID)
+# String hygiene policies (applied to every raw string cell before transforms)
 # ---------------------------------------------------------------------------
-class FixCounter:
-    def __init__(self):
-        # column -> {"TYP-01/strip_currency": n, ...}
-        self.counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
-    def add(self, column: str, fixes: list[str]):
-        for f in fixes:
-            self.counts[column][f] += 1
-
-    def as_dict(self) -> dict:
-        return {col: dict(d) for col, d in self.counts.items()}
-
-    def total(self) -> int:
-        return sum(n for d in self.counts.values() for n in d.values())
+_UNICODE_WS = {
+    " ", " ", " ", " ", " ", " ", " ",
+    " ", " ", " ", " ", " ", " ", " ",
+    " ", " ", " ", "　",
+}
 
 
-# ---------------------------------------------------------------------------
-# Cell normalization (ENC-06 NFC, STR control + whitespace, NUL-01 empty->null)
-# ---------------------------------------------------------------------------
-# Non-ASCII unicode whitespace collapsed to a plain ASCII space (built from
-# explicit code points to avoid ambiguity of literal characters in source).
-_ZS_CODEPOINTS = [
-    0x00A0, 0x1680,
-    0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007,
-    0x2008, 0x2009, 0x200A, 0x202F, 0x205F, 0x3000,
-]
-_ZS_WHITESPACE_RE = re.compile("[" + "".join(chr(c) for c in _ZS_CODEPOINTS) + "]")
-
-
-def normalize_cell(raw, *, unicode_normalization="NFC", strip_control_chars=True,
-                   normalize_unicode_whitespace=True, trim_whitespace=True,
-                   empty_string_is_null=True):
-    """Apply the source-level text policies. Returns (value_or_None, fixes:list[str])."""
+def apply_string_policies(raw, policies, warn):
+    """Apply source-wide string hygiene. Returns the cleaned string (or None if the
+    cell becomes empty and empty_string_is_null is on). `warn(code)` tallies a fix."""
     if raw is None:
-        return None, []
-    fixes: list[str] = []
+        return None
     s = raw
 
-    if unicode_normalization:
-        n = unicodedata.normalize(unicode_normalization, s)
-        if n != s:
-            fixes.append(f"ENC-06/{unicode_normalization.lower()}")
-        s = n
+    if policies.get("strip_control_chars"):
+        cleaned = "".join(
+            ch for ch in s
+            if ch in ("\t", "\n", "\r") or unicodedata.category(ch)[0] != "C"
+        )
+        if cleaned != s:
+            warn("STR-05")  # control chars stripped
+            s = cleaned
 
-    if strip_control_chars:
-        # drop Cc control characters (CSV cells shouldn't carry them)
-        n = "".join(ch for ch in s if unicodedata.category(ch) != "Cc")
-        if n != s:
-            fixes.append("STR-05/strip_control_chars")
-        s = n
+    if policies.get("normalize_unicode_whitespace"):
+        cleaned = "".join(" " if ch in _UNICODE_WS else ch for ch in s)
+        if cleaned != s:
+            warn("STR-06")  # exotic unicode whitespace normalized
+            s = cleaned
 
-    if normalize_unicode_whitespace:
-        n = _ZS_WHITESPACE_RE.sub(" ", s)
-        if n != s:
-            fixes.append("STR-06/normalize_unicode_whitespace")
-        s = n
+    if policies.get("unicode_normalization"):
+        form = policies["unicode_normalization"]
+        cleaned = unicodedata.normalize(form, s)
+        if cleaned != s:
+            warn("STR-04")  # unicode normalized
+            s = cleaned
 
-    if trim_whitespace:
-        n = s.strip()
-        if n != s:
-            fixes.append("STR-02/trim_whitespace")
-        s = n
+    if policies.get("trim_whitespace"):
+        cleaned = s.strip()
+        if cleaned != s:
+            warn("STR-02")  # leading/trailing whitespace trimmed
+            s = cleaned
 
-    if empty_string_is_null and s == "":
-        return None, fixes
+    if policies.get("empty_string_is_null") and s == "":
+        return None
 
-    return s, fixes
+    return s
 
 
 # ---------------------------------------------------------------------------
-# Type transforms
+# Type coercions
 # ---------------------------------------------------------------------------
-_CURRENCY_RE = re.compile("[" + "".join(chr(c) for c in (0x24, 0xA3, 0x20AC, 0xA5)) + "]")
+
+def to_string(value, max_length=None):
+    """Identity string coercion (TYP-07). Enforces max_length as a hard error rather
+    than silently truncating (STR-07 house rule: never silently truncate)."""
+    if value is None:
+        return None
+    if max_length is not None and len(value) > max_length:
+        raise CellError("STR-07", f"value length {len(value)} exceeds max_length {max_length}")
+    return value
 
 
-def to_decimal(raw, *, scale=2, thousands_sep=",", currency=False,
-               accounting_negative=False):
-    """TYP-01/TYP-02: parse a monetary/numeric string to a scaled Decimal.
-
-    Returns (Decimal_or_None, fixes). Raises TransformError('TYP-01', ...) on failure.
-    """
-    if raw is None:
-        return None, []
-    fixes: list[str] = []
-    s = raw.strip()
+def to_decimal(value, scale, thousands_sep=None, currency=False,
+               accounting_negative=False, warn=None):
+    """Parse a decimal (TYP-01). Strips currency symbols and thousands separators;
+    treats (n) as negative when accounting_negative is set. Quantizes to `scale`."""
+    if value is None:
+        return None
+    s = value
     negative = False
 
     if accounting_negative and s.startswith("(") and s.endswith(")"):
         negative = True
         s = s[1:-1].strip()
-        fixes.append("TYP-01/accounting_negative")
+        if warn:
+            warn("TYP-01")  # accounting-style negative
+
+    if currency:
+        stripped = s.lstrip("$").strip()
+        # also tolerate a trailing symbol
+        stripped = stripped.rstrip("$").strip()
+        if stripped != s:
+            if warn:
+                warn("TYP-01")  # currency symbol stripped
+            s = stripped
+
+    if thousands_sep:
+        if thousands_sep in s:
+            s = s.replace(thousands_sep, "")
+            if warn:
+                warn("TYP-01")  # thousands separator removed
 
     if s.startswith("-"):
         negative = True
         s = s[1:].strip()
 
-    if currency:
-        n = _CURRENCY_RE.sub("", s)
-        if n != s:
-            fixes.append("TYP-01/strip_currency")
-        s = n
-
-    if thousands_sep and thousands_sep in s:
-        s = s.replace(thousands_sep, "")
-        fixes.append("TYP-01/strip_thousands_sep")
-
-    s = s.strip()
     try:
         d = Decimal(s)
-    except (InvalidOperation, ValueError):
-        raise TransformError("TYP-01", f"cannot parse decimal from {raw!r}")
+    except InvalidOperation:
+        raise CellError("TYP-01", f"cannot parse decimal from {value!r}")
 
     if negative:
         d = -d
-    quantum = Decimal(1).scaleb(-scale)  # scale=2 -> Decimal('0.01')
-    d = d.quantize(quantum, rounding=ROUND_HALF_UP)
-    return d, fixes
+
+    quant = Decimal(1).scaleb(-scale)  # e.g. scale=2 -> Decimal('0.01')
+    return d.quantize(quant, rounding=ROUND_HALF_UP)
 
 
-def to_date(raw, *, formats, sentinels=()):
-    """TYP-03: parse a date under an explicit, ordered set of formats.
-
-    Sentinels (NUL-03) map to None. Returns (date_or_None, fixes).
-    Raises TransformError('TYP-03', ...) on failure.
-    """
-    if raw is None:
-        return None, []
-    if raw in sentinels:
-        return None, ["NUL-03/sentinel_to_null"]
+def to_date(value, formats, rendering="iso8601"):
+    """Parse a date under an explicit, finite list of formats (TYP-03 resolved upstream).
+    Renders per `rendering`. Raises on no-match rather than guessing."""
+    if value is None:
+        return None
+    from datetime import datetime
     for fmt in formats:
         try:
-            return datetime.strptime(raw, fmt).date(), []
+            dt = datetime.strptime(value, fmt)
         except ValueError:
             continue
-    raise TransformError("TYP-03", f"cannot parse date from {raw!r} using {list(formats)}")
+        if rendering == "iso8601":
+            return dt.date().isoformat()
+        return dt.date().isoformat()
+    raise CellError("TYP-03", f"date {value!r} matched none of {formats}")
 
 
-def to_bool(raw, *, mapping):
-    """TYP-06: map a controlled boolean vocabulary. Returns (bool_or_None, fixes)."""
-    if raw is None:
-        return None, []
-    if raw in mapping:
-        return mapping[raw], []
-    raise TransformError("TYP-06", f"unrecognized boolean token {raw!r}; expected one of {sorted(mapping)}")
-
-
-# ---------------------------------------------------------------------------
-# Constraint enforcement
-# ---------------------------------------------------------------------------
-def enforce_string(value, *, nullable, max_length=None, column):
-    """String column constraints. Never silently truncates (STR-07)."""
+def to_bool(value, mapping):
+    """Map a controlled boolean vocabulary (TYP-06). Unknown token -> error."""
     if value is None:
-        if not nullable:
-            raise TransformError("NUL-05", f"non-nullable column {column!r} is null")
         return None
-    if max_length is not None and len(value) > max_length:
-        raise TransformError("STR-07", f"value in {column!r} exceeds max_length {max_length}: {value!r}")
-    return value
+    if value in mapping:
+        return mapping[value]
+    raise CellError("TYP-06", f"unrecognized boolean token {value!r}; expected one of {sorted(mapping)}")
 
 
-def enforce_not_null(value, *, nullable, column):
-    if value is None and not nullable:
-        raise TransformError("NUL-05", f"non-nullable column {column!r} is null")
-    return value
-
-
-# ---------------------------------------------------------------------------
-# Output rendering
-# ---------------------------------------------------------------------------
-def render(value) -> str:
-    """Render a converted value for CSV output. None -> empty string."""
+def apply_sentinels(value, sentinel_values, warn=None):
+    """Replace configured sentinel tokens with null (NUL-03)."""
     if value is None:
-        return ""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, Decimal):
-        return str(value)
-    if hasattr(value, "isoformat"):  # date -> ISO-8601
-        return value.isoformat()
-    return str(value)
-
-
-# ---------------------------------------------------------------------------
-# Error budget (ERR-01)
-# ---------------------------------------------------------------------------
-def budget_threshold(total_rows: int, *, percent: float, min_rows: int) -> int:
-    """Max tolerated quarantined rows: max(min_rows, percent-of-total)."""
-    pct_allow = (percent / 100.0) * total_rows
-    return int(max(min_rows, pct_allow))
+        return None
+    if value in sentinel_values:
+        if warn:
+            warn("NUL-03")  # sentinel -> null
+        return None
+    return value

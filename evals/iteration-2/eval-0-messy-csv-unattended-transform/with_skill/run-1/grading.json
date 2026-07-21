@@ -1,0 +1,19 @@
+{
+  "runtime_version": "0.2.0",
+  "expectations": [
+    {"text": "Accounting completeness: rows_in reconciles + each planted disposition row traceable with a reason", "passed": true,
+     "evidence": "summary rows_in=9, out=6, quarantined=1 (STR-02 ragged); warnings tally every fix incl STR-05(dup)/STR-06(blank+footer); all reconcile"},
+    {"text": "Exact-duplicate kept and reported, or removal explicitly recorded (never silently dropped)", "passed": true,
+     "evidence": "KEPT (taxonomy default): exact_duplicate_rows=[{row 8, first_seen 6}], STR-05:<row> warning counted, row present in output. Contrast baseline which drops it."},
+    {"text": "Quarantined raw row preserved intact for reprocessing; re-run path documented", "passed": true,
+     "evidence": "STR-02 ragged row raw preserved in quarantine.csv; errors.jsonl coded record"},
+    {"text": "Content-changing repair (mojibake) opt-in: off, or repaired with decision recorded reviewable/unconfirmed machine-readably", "passed": true,
+     "evidence": "repaired to match target BUT flagged: ENC-06 counted + spec review_required marks it a taxonomy-deviation (default is off), provenance unconfirmed"},
+    {"text": "Leading-zero ZIP 02134 preserved", "passed": true, "evidence": "TYP-07 string, 02134 preserved"},
+    {"text": "Accounting negative (500) -> -500.00", "passed": true, "evidence": "TYP-01 accounting_negative"},
+    {"text": "N/A sentinel -> null with recorded decision", "passed": true, "evidence": "NUL-03:notes counted, N/A->null"},
+    {"text": "MDY-vs-DMY explicitly flagged as assumption needing review", "passed": true, "evidence": "spec review_required flags MDY as unconfirmed"}
+  ],
+  "summary": {"pass_rate": 1.0, "passed": 8, "failed": 0, "total": 8},
+  "notes": "8/8. Uses stable taxonomy error codes (STR-02/ENC-06/NUL-03) and KEEPS the duplicate per house default. Same score as the 8/8 isolated baseline — the discriminator is disposition semantics (keep vs drop dup) + code stability + determinism, not the pass/fail count."
+}

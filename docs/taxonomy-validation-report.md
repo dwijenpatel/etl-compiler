@@ -117,7 +117,23 @@ knowledge of our taxonomy (anchoring-free).
 
 ---
 
-## The one default worth reconsidering: ERR-01 (quarantine)
+## The one default worth reconsidering: ERR-01 (quarantine) — RESOLVED, keep it
+
+> **Update 2026-07-20: the adversarial pass ran.** Verdict: **keep the quarantine default.**
+> Full holdings + distilled Tier-A rows in `~/repos/etl-evidence/external/error-disposition-defaults/`.
+> The content-vs-movement crux resolved — fail-loud defaults *do* fire on content, so the
+> conflict is real, but tools split into **four** default poles (fail-loud / annotate-and-keep
+> / silent-coerce / quarantine), none of them quarantine. Decisive points: (1) every
+> non-quarantine default that keeps the row produces the "loaded fine but silently degraded"
+> artifact this project exists to prevent; (2) the most-used parsers (pandas/DuckDB/pyarrow)
+> **silently coerce** content errors by default (live-verified) — quarantine is strictly
+> better, not in conflict, there; (3) ERR-02's error budget already makes the behavior
+> "quarantine up to a threshold, then fail loud," a hybrid; (4) the one documented directional
+> switch (Airbyte V1→V2) moved *away* from fail-loud. Non-default follow-ups the evidence
+> *does* support: keep ERR-01 option (c) "annotate" as first-class and adopt Airbyte's
+> `_airbyte_meta {field,change,reason}` shape for it; import DuckDB's `reject_errors` schema
+> as the ERR-03(i) reference; consider a future ADF-style `redirect` disposition. The
+> original retrieval-grade finding is preserved below for the record.
 
 **Finding (stream D, `A`-quality once adversarially confirmed):** across 11 surveyed tools,
 **none defaults to row-quarantine-and-continue** — the v0.1 ERR-01 house default. The

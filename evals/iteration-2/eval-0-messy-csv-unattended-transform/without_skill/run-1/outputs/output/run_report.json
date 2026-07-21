@@ -1,0 +1,69 @@
+{
+  "source": "eval-inputs/orders_export.csv",
+  "output": "output/orders_warehouse.csv",
+  "input_had_utf8_bom": true,
+  "counts": {
+    "data_rows_in": 9,
+    "rows_written": 5,
+    "blank_rows_skipped": 1,
+    "footer_rows_skipped": 1,
+    "exact_duplicates_dropped": 1,
+    "order_id_conflicts_quarantined": 0,
+    "rows_rejected_total": 3
+  },
+  "auto_fixes": [
+    {
+      "fix": "accounting_negative",
+      "column": "amount",
+      "count": 1
+    },
+    {
+      "fix": "amount_cleaned",
+      "column": "amount",
+      "count": 1
+    },
+    {
+      "fix": "bool_normalize",
+      "column": "is_active",
+      "count": 6
+    },
+    {
+      "fix": "date_reformat",
+      "column": "order_date",
+      "count": 6
+    },
+    {
+      "fix": "mojibake_repair",
+      "column": "customer_name",
+      "count": 1
+    },
+    {
+      "fix": "null_token_to_empty",
+      "column": "notes",
+      "count": 1
+    },
+    {
+      "fix": "unicode_nfc_normalize",
+      "column": "customer_name",
+      "count": 1
+    }
+  ],
+  "review_required": [
+    {
+      "issue": "exact_duplicate_rows",
+      "detail": "order_id(s) 10000005 appeared more than once with identical content. Kept the first occurrence and dropped the rest, because order_id is the warehouse primary key and would collide. Confirm the dupes are export artifacts, not real distinct orders."
+    },
+    {
+      "issue": "ragged_rows",
+      "detail": "1 row(s) had the wrong number of columns and were quarantined to rejects.csv rather than padded or column-shifted. See source lines 7."
+    },
+    {
+      "issue": "mojibake_repaired",
+      "detail": "Some customer names were double-encoded UTF-8 (e.g. 'JosÃ©') and were auto-repaired to 'José'-style text (matches the target sample). Spot-check the repaired names."
+    },
+    {
+      "issue": "date_format_assumption",
+      "detail": "Source dates parsed as US MM/DD/YYYY (confirmed by the target sample rows). If any vendor batch ever uses DD/MM/YYYY this would misread; all sample dates conform to MM/DD."
+    }
+  ]
+}

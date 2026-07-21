@@ -13,13 +13,13 @@ CONFIG = {
     "name": "vendor_orders",
     "spec_version": "0.1",                       # etlspec format version (manifest, ERR-06)
     "generator_version": "etl-generator/0.1",    # what generated this pipeline (ERR-06)
-    "encoding": "utf-8",                         # source.encoding (detected-confirmed)
-    "delimiter": ",",                            # source.dialect.delimiter
-    "quotechar": '"',                            # source.dialect.quotechar
+    "encoding": "utf-8",                         # detected-confirmed
+    "delimiter": ",",
+    "quotechar": '"',
     "expected_columns": ["order_id", "cust_name", "amt", "dt", "active", "zip"],
     "output_columns": ["order_id", "customer_name", "amount", "order_date", "is_active", "postal_code"],
     "policies": {
-        # -- mirror of the spec's policies block --
+        # text/null cleaning (ENC-03/04/05, NUL-01/02/03) — mirrors spec policies block
         "unicode_normalization": "NFC",          # default
         "strip_control_chars": True,             # default
         "normalize_unicode_whitespace": True,    # default
@@ -29,10 +29,9 @@ CONFIG = {
         "datetime_rendering": "iso8601",         # default
         "error_disposition": "quarantine",       # default (ERR-01)
         "error_budget": {"percent": 25, "min_rows": 2},  # explicit (ERR-02)
-        "duplicate_rows": "keep",                # default (STR-05)
-        # per-column null sentinels — applied by the runtime during null resolution,
-        # before transform_row runs (NUL-03). From mapping order_date.sentinels.
-        "sentinels": {"dt": ["N/A"]},            # detected-confirmed
+        "duplicate_rows": "keep",                # default (STR-05: keep-and-report)
+        # per-source-column sentinels (NUL-03) — applied during null resolution, pre-transform
+        "sentinels": {"dt": ["N/A"]},            # detected-confirmed on order_date source
     },
 }
 
@@ -44,25 +43,19 @@ def transform_row(row, rt_ctx):
     (ENC-03/04/05, NUL-01/02/03 applied and counted by the runtime).
     """
     out = {}
-    # order_id <- order_id  [TYP-07: kept as string, uniform 8-digit — detected-confirmed]
-    # target order_id is nullable: false -> guard with not_null (NUL-04)
+    # order_id <- order_id  [TYP-07: kept as string, uniform 8-digit — detected-confirmed; target non-nullable]
     out["order_id"] = rt.not_null(row["order_id"], "order_id")
-    # customer_name <- cust_name  [direct copy]
-    # target customer_name is nullable: false -> guard with not_null (NUL-04)
+    # customer_name <- cust_name  [direct copy; target non-nullable]
     out["customer_name"] = rt.not_null(row["cust_name"], "cust_name")
-    # amount <- amt  [TYP-01: strip $/commas, (n)=negative — detected-confirmed]
-    # target amount is nullable: true, scale 2 -> to_decimal passes None through
+    # amount <- amt  [TYP-01: strip $/commas, (n)=negative — detected-confirmed; target decimal scale 2, nullable]
     out["amount"] = rt.to_decimal(row["amt"], "amt", thousands_sep=",",
                                   currency=True, accounting_negative=True, scale=2)
-    # order_date <- dt  [TYP-03: MDY — explicit user decision; NUL-03 sentinels: N/A]
-    # target order_date is nullable: true -> to_date passes None through
+    # order_date <- dt  [TYP-03: MDY — explicit user decision; sentinel N/A -> null (NUL-03); target date, nullable]
     out["order_date"] = rt.to_date(row["dt"], "dt", formats=["%m/%d/%Y"])
-    # is_active <- active  [TYP-06: Y/N vocabulary — detected-confirmed]
-    # target is_active is nullable: true -> to_bool passes None through
+    # is_active <- active  [TYP-06: Y/N vocabulary — detected-confirmed; target boolean, nullable]
     out["is_active"] = rt.to_bool(row["active"], "active",
                                   mapping={"Y": True, "N": False}, report=rt_ctx)
-    # postal_code <- zip  [TYP-07: string, leading zeros present (02134) — detected-confirmed]
-    # target postal_code is nullable: true, max_length 10 -> check_length (TYP-11)
+    # postal_code <- zip  [TYP-07: string, leading zeros present (02134); target string max_length 10, nullable]
     out["postal_code"] = rt.check_length(row["zip"], "zip", max_length=10)
     return out
 

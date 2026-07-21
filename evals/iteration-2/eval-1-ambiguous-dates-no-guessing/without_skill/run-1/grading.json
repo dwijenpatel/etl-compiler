@@ -1,36 +1,37 @@
 {
+  "isolation": "verified — baseline wrote its own stdlib runtime + SQLite loader; no skill artifacts",
   "expectations": [
     {
       "text": "No silent date guess: MDY-vs-DMY interpretation not silently assumed; flagged unconfirmed/for-review",
       "passed": true,
-      "evidence": "Assumed MM/DD/YYYY but loudly: run_summary.date_format_used='MM/DD/YYYY (assumed, unconfirmed)' + review_required entry with %d/%m/%Y re-run instruction. Note: assumed-and-flagged, not quarantined — see notes"
+      "evidence": "assumed %m/%d/%Y but flagged all 7 dates in review_required (issue=ambiguous_date_format) with raw+loaded_as+assumption. Assumed-and-flagged, not quarantined."
     },
     {
-      "text": "Ambiguity disposition preserves reprocessability: affected rows quarantined with raw preserved, OR any degraded loading is an explicitly recorded reviewable decision in machine-readable form",
+      "text": "Ambiguity disposition preserves reprocessability: quarantine w/ raw OR degraded loading recorded reviewable in machine-readable form",
       "passed": true,
-      "evidence": "All 7 rows loaded with assumed-MDY dates; decision recorded machine-readably (review_required code=date-format-ambiguous) with documented re-run path. Passes as written; disposition is reinterpret-and-flag, not quarantine"
+      "evidence": "dates loaded under assumed format; decision machine-readable in review_required with re-run path. Disposition = reinterpret-and-flag, not quarantine."
     },
     {
       "text": "9999 flagged as suspected sentinel for review, not loaded as real weight silently",
       "passed": true,
-      "evidence": "3 rows nulled with per-row warnings (code=NUL-sentinel), counter weight_sentinel_nulled=3, review_required code=weight-sentinel"
+      "evidence": "flagged in review_required as suspected sentinel — BUT loaded 9999 as-is (as real weight) rather than nulling/quarantining. Not silent, but loaded. Divergence from skill (which quarantines)."
     },
     {
-      "text": "Empty shipment_id row rejected via NOT NULL with a coded, machine-readable error record",
+      "text": "Empty shipment_id rejected via NOT NULL with a coded, machine-readable error record",
       "passed": true,
-      "evidence": "rejected_rows record (row 7) with raw preserved + shipments_rejected.csv; reason is prose ('shipment_id is empty but target column is NOT NULL'), no stable error code"
+      "evidence": "quarantined to shipments_quarantine.csv, code MISSING_REQUIRED (ad-hoc, not taxonomy NUL-04), raw preserved, SQLite NOT NULL enforced"
     },
     {
       "text": "Carrier case collisions surfaced: canonicalized with a recorded decision, or flagged",
       "passed": true,
-      "evidence": "4 canonicalizations, each a per-row machine-readable warning (code=case-canon), counter carrier_canonicalized=4"
+      "evidence": "raw case preserved, inconsistency reported, canonicalization flagged as partner decision"
     },
     {
       "text": "Accounting completeness: machine-readable report reconciles rows_in vs loaded + quarantined + excluded",
       "passed": true,
-      "evidence": "counters: rows_read=8 = rows_loaded=7 + rows_rejected=1; every modified value has a per-row warning record"
+      "evidence": "counts: rows_read=8 = rows_loaded=7 + rows_quarantined=1; counts_reconcile=true; db_row_count=7"
     }
   ],
   "summary": {"pass_rate": 1.0, "passed": 6, "failed": 0, "total": 6},
-  "notes": "Very strong baseline. Contract divergences vs taxonomy (not priced by these assertions): (1) ambiguous dates loaded under an assumed format rather than quarantined — downstream sees plausible-but-possibly-transposed dates; taxonomy unattended rule prefers quarantine-over-reinterpret; (2) 9999 sentinel nulled by default rather than ask-class; both were flagged machine-readably. Ad-hoc warning codes (NUL-sentinel, case-canon) rather than stable taxonomy IDs. Contamination check: wrote its own code (no runtime import), but 'review_required' vocabulary matches repo conventions — mild conceptual leak possible."
+  "notes": "Strong isolated baseline (even loads into SQLite to enforce NOT NULL for real). Same contract divergences as iteration-1: loads-and-flags rather than quarantine for both ambiguous dates and the 9999 sentinel (downstream sees rows that 'loaded fine'); ad-hoc error codes (MISSING_REQUIRED) not stable taxonomy IDs. These are exactly the differences the assertions give equal credit to — the skill's edge is the coded, reprocessable contract, not the mechanics."
 }
