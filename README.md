@@ -20,7 +20,7 @@ Bad data is the norm, not the exception: **~26% of open-government CSVs fail a n
 - **Surfaces every decision, corrupts nothing.** Bad rows are **quarantined with their raw form preserved** (reprocessable), never silently coerced, dropped, or padded. Every auto-fix is **counted**, never silent.
 - **Never guesses meaning-changing ambiguity.** MDY-vs-DMY dates, decimal locale, `N/A`-vs-`9999` sentinels — the taxonomy's `ask` class *always* asks; in unattended mode it quarantines rather than reinterprets. (A wrong BOM strip is annoying; a wrong date format silently corrupts every row.)
 - **Reports at three granularities, with stable codes.** Per-row error records, per-error-type aggregates, and a run summary + manifest — every error code is a **taxonomy ID** (`TYP-03`, `STR-02`), so a quarantined row traces straight to the documented decision that governs it. Aggregate them across pipelines; they don't drift.
-- **Same spec → same behavior.** Decisions live in an auditable `.etlspec.yaml`, and edge-case semantics live in one shared, tested runtime — so regeneration is deterministic and every pipeline handles nulls/encodings/dates *identically*. One-shot generation cannot offer this; consistency is the whole point.
+- **Same spec → same bytes.** Decisions live in an auditable `.etlspec.yaml`, edge-case semantics live in one shared, tested runtime, and a **deterministic compiler** turns the spec into the pipeline with no model in the loop — identical spec bytes produce a byte-identical pipeline, so a regenerated pipeline is reviewable as a spec diff. One-shot generation cannot offer this; consistency is the whole point.
 
 ## How it works
 
@@ -35,7 +35,8 @@ sample input ──▶ PROFILER ──▶ findings (taxonomy IDs + evidence)
                         SPEC (.etlspec.yaml — every decision, with provenance)
                                  │
                                  ▼
-                        CODEGEN ──▶ thin pipeline.py  +  etl_runtime.py (shared, tested)
+                        COMPILER (deterministic, no model in the loop)
+                                 ──▶ thin pipeline.py  +  etl_runtime.py (shared, tested)
                                  │
                                  ▼
                         VERIFIED RUN ──▶ output.csv + quarantine.csv
@@ -83,4 +84,4 @@ Drop the `skill/etl-generator/` folder into your harness's skills directory (or 
 
 **v0.2** — taxonomy, profiler, and runtime hardened and validated against reality. The runtime has a real unit-test suite (55 tests); the taxonomy was validated against a 244-file corpus of genuinely messy real-world data plus a graded, primary-sourced census of 15 shipping ETL tools (the competitive claims above come from it). Six profiler detection bugs found on real portal files were fixed; a new failure mode (magnitude-suffixed numerics) was added end-to-end. The one load-bearing default question — quarantine-vs-fail-loud — was settled by a dedicated adversarial evidence pass (verdict: keep quarantine; see the validation report).
 
-Eval iteration 2 (contract-level assertions, isolated baselines) found that a strong model satisfies the *contract* unaided on single runs — so the skill's real value is determinism, stable taxonomy codes, and a tested shared runtime, which single-run scoring can't capture. **Next:** a determinism-focused eval and a deterministic `spec → pipeline.py` compiler so regeneration needs no model in the loop.
+Eval iteration 2 (contract-level assertions, isolated baselines) found that a strong model satisfies the *contract* unaided on single runs — so the skill's real value is determinism, stable taxonomy codes, and a tested shared runtime, which single-run scoring can't capture. That conclusion is now built: the **deterministic `spec → pipeline.py` compiler** ships in the skill (`scripts/compile_spec.py`, stdlib-only, fail-loud spec validation, byte-identical regeneration). **Next:** the determinism-focused eval that exercises it.

@@ -1,6 +1,8 @@
 # Code Generation Guide
 
-How to turn an approved .etlspec.yaml into a pipeline. The contract: **the pipeline is thin, the runtime is smart.** If you find yourself writing null checks, date parsing, or error accounting inline in the pipeline, stop — that logic belongs in `etl_runtime.py`, which already has it.
+How an approved .etlspec.yaml becomes a pipeline. The contract: **the pipeline is thin, the runtime is smart.** If you find yourself writing null checks, date parsing, or error accounting inline in the pipeline, stop — that logic belongs in `etl_runtime.py`, which already has it.
+
+**The primary path is the deterministic compiler** (`scripts/compile_spec.py`): it validates the spec (fail-loud on anything incomplete or outside the documented format) and emits the structure below byte-deterministically — same spec bytes, same pipeline bytes, no model in the loop. This document is therefore two things: the **contract for what the compiler emits**, and the **fallback guide** for hand-generation in the rare case the compiler declines a spec (it says why) — e.g. `concat`/`split` ops it does not yet support.
 
 ## Files produced
 

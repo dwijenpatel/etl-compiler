@@ -57,12 +57,18 @@ Map input columns to output columns: direct copies, renames, casts, reformatting
 
 Write `<name>.etlspec.yaml` following `references/spec-format.md` exactly. The spec must contain a decision (with provenance) for every policy the taxonomy defines — including defaulted ones. Show it to the user for approval. The spec, not the conversation, is the source of truth; if the user later wants changes, edit the spec and regenerate.
 
-### Step 6 — Generate the pipeline
-
-Read `references/codegen-guide.md`, then:
+### Step 6 — Generate the pipeline (compiler-first; do not hand-write code)
 
 1. Copy `assets/etl_runtime.py` into the user's project directory (unmodified — it is the tested, shared implementation of taxonomy semantics; never inline or fork its logic into the pipeline).
-2. Generate `<name>_pipeline.py`: a thin orchestration script that embeds the resolved spec as a config constant, defines per-column transforms by calling runtime coercers, and delegates the run loop, error disposition, reporting, and atomic output to the runtime.
+2. Run the bundled deterministic compiler — **the spec is your output; the pipeline is the compiler's**:
+
+```bash
+python3 scripts/compile_spec.py <name>.etlspec.yaml -o <name>_pipeline.py
+```
+
+Identical spec bytes always produce a byte-identical pipeline (the header embeds the spec's sha256), so regeneration is reviewable as a diff of the *spec*, never of code.
+
+If the compiler raises a `SpecError`, the spec — not the compiler — is wrong or incomplete: fix the spec (the error names the exact rule, e.g. a missing policy key or an undeclared unfilled column) and recompile. Only if the spec genuinely needs a transform the compiler does not yet support (it will say so) fall back to hand-generating per `references/codegen-guide.md`, preferring the `{op: expr}` escape hatch over new inline logic.
 
 Every generated error path uses taxonomy IDs as error codes. Every mapping carries a comment tracing it to the spec.
 

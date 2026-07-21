@@ -41,6 +41,7 @@ skill/etl-generator/       ← the Agent Skill (open standard; self-contained)
   SKILL.md                 ← workflow instructions
   references/              ← taxonomy copy, spec-format.md, codegen-guide.md
   scripts/profile.py       ← working profiler (stdlib-only); emits findings keyed by taxonomy IDs
+  scripts/compile_spec.py  ← deterministic spec → pipeline.py compiler (stdlib-only, fail-loud)
   assets/etl_runtime.py    ← the shared runtime (stdlib-only), v0.2.0
   evals/evals.json         ← eval prompts + expectations (relative paths)
 corpus/                    ← reproducible messy-data corpus + profiler audit harness
@@ -66,12 +67,13 @@ evals/
 - **ERR-01 default RESOLVED (adversarial pass, 2026-07-20): keep quarantine.** Corpus pass 2 (`~/repos/etl-evidence/external/error-disposition-defaults/`, distilled). Content-vs-movement crux resolved: fail-loud defaults fire on content too, but tools split into 4 poles (fail-loud / annotate-and-keep / silent-coerce / quarantine) — none quarantine, and the most-used parsers *silently coerce* content errors, so quarantine is strictly better there. Non-default follow-ups the evidence supports (not yet done): promote ERR-01 option (c) "annotate" to first-class with Airbyte's `_airbyte_meta {field,change,reason}` shape; adopt DuckDB `reject_errors` schema for ERR-03(i); consider an ADF-style `redirect` disposition.
 - **Interview batching DONE**: profiler emits `interview_groups` (homogeneous per-column ask-findings collapsed — 9k→1 on the wide file); SKILL.md drives the interview from it.
 - **Eval iteration 2 DONE** (`evals/iteration-2/`, `docs/eval-report-iteration-2.md`): v0.2 reruns, contract-level assertions, isolated baselines. **skill 19/19 = baseline 19/19** — a strong isolated Opus baseline passes even the hard contract assertions unaided. The skill's real value (determinism, stable taxonomy codes, tested runtime, editable spec) is NOT measurable on single runs. **Iteration 3 must measure determinism/consistency, not single-run correctness** (harness sketched in the report).
+- **Deterministic compiler DONE** (`skill/etl-generator/scripts/compile_spec.py`, v0.1.0): `spec → pipeline.py` with no model in the loop; same spec bytes → byte-identical pipeline (header embeds spec sha256; no timestamps). Includes a strict stdlib-only loader for the etlspec subset of YAML — fail-loud (SpecError + line number) on anything outside the documented format, including YAML 1.1 boolean traps (`Y`/`N`/`yes`/`no` stay strings; only `true`/`false` resolve). Validates spec completeness (all 10 policy keys, mapped-or-declared target columns, known ops/kwargs) before emitting. `concat`/`split` ops not yet supported (fail-loud, points to `op: expr`). SKILL.md step 6 is now compiler-first: the agent authors the spec, the compiler owns the code. Tests in `tests/test_compiler.py` (25) incl. byte-determinism and end-to-end behavior vs the vendor sample.
 
 ## Prioritized next steps
 
 1. **Eval iteration 3 — measure determinism, not correctness** (the iteration-2 conclusion). Harness sketched in `docs/eval-report-iteration-2.md`: run same spec N times → assert byte-identical output; same spec across input variants → assert stable codes/dispositions; spec-edit → assert only-that-behavior-changed. This tests the skill's actual moat, which single-run correctness cannot.
-2. **Deterministic compiler**: today codegen is performed by the agent following `references/codegen-guide.md`. Build `spec → pipeline.py` as an actual script (template/AST-based) so regeneration is byte-deterministic without a model in the loop. Directly enables #1 and was always the intended end-state.
-3. **ERR-01 non-default follow-ups** (evidence-backed, above): promote annotate disposition; adopt `_airbyte_meta` change-ledger + DuckDB `reject_errors` schemas.
+2. **ERR-01 non-default follow-ups** (evidence-backed, above): promote annotate disposition; adopt `_airbyte_meta` change-ledger + DuckDB `reject_errors` schemas.
+3. **Compiler follow-ups**: `concat`/`split` op support; consider having the compiler also emit the run-report contract test alongside the pipeline.
 4. **Charset detection** for ENC-01: the Latin-1 fallback always "succeeds", so real Shift-JIS (JP corpus files) is mislabeled `latin-1` with mojibake headers. Needs byte-n-gram/chardet-style detection within the stdlib-only constraint.
 5. **Extract the runtime into a proper package** (`pip install etl-solved-runtime`) — the unit-test suite now exists (`tests/`), so packaging is the remaining step.
 6. **TypeScript runtime + target**; **SQL/dbt target** (analyst-serving surface). Sequenced after the Python path is solid.
