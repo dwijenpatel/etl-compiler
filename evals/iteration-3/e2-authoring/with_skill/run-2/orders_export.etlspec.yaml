@@ -1,0 +1,88 @@
+etlspec: 0.1
+name: orders_export
+taxonomy_version: 0.2
+# Vendor orders export -> warehouse orders format.
+# Meaning-changing decisions (TYP-03 date order, TYP-01 numeric cleaning, TYP-06
+# boolean vocab, NUL-03 sentinel, ENC-06 mojibake repair) were resolved against the
+# provided desired-output sample (eval-inputs/target_orders.csv), which is treated as
+# the user's confirmation -> provenance: detected-confirmed with the target as evidence.
+source:
+  format: csv
+  encoding: {value: utf-8, provenance: detected-confirmed}          # ENC-01: valid UTF-8 (BOM stripped, ENC-02)
+  dialect: {delimiter: ",", quotechar: '"'}
+  header: present                                                    # STR-04: header names carry stray spaces (" customer "); runtime trims
+  expected_columns: [order_id, customer, amt, order_date, active, zip, notes]
+target:
+  columns:
+    - {name: order_id, type: string, nullable: false}
+    - {name: customer_name, type: string, nullable: false}
+    - {name: amount, type: decimal, scale: 2, nullable: true}
+    - {name: order_date, type: date, nullable: true}
+    - {name: is_active, type: boolean, nullable: true}
+    - {name: postal_code, type: string, nullable: true, max_length: 10}
+    - {name: notes, type: string, nullable: true}
+policies:
+  unicode_normalization: {value: NFC, provenance: default}           # ENC-03: composes NFD accents ("Re´ne´" -> "Réné")
+  strip_control_chars: {value: true, provenance: default}            # ENC-04: strips embedded vertical tab ("Bob\x0bSmith")
+  normalize_unicode_whitespace: {value: true, provenance: default}   # ENC-05: NBSP ("Ann Lee") -> space
+  trim_whitespace: {value: true, provenance: default}                # NUL-02
+  empty_string_is_null: {value: true, provenance: default}           # NUL-01: empties -> null (renders as empty field)
+  null_propagation: {value: sql, provenance: default}                # NUL-05
+  datetime_rendering: {value: iso8601, provenance: default}          # TYP-05
+  error_disposition: {value: quarantine, provenance: default}        # ERR-01
+  error_budget: {value: {percent: 5, min_rows: 100}, provenance: default}   # ERR-02
+  duplicate_rows: {value: keep, provenance: default}                 # STR-05: keep exact duplicates, but report them
+mappings:
+  - target: order_id
+    source: order_id
+    transforms: []
+    decisions:
+      - {id: TYP-07, choice: string, provenance: detected-confirmed, evidence: "uniform 8-digit ids; target keeps as string"}
+  - target: customer_name
+    source: customer
+    # ENC-06 mojibake repair is OPT-IN (ask-class). Enabled because the target sample
+    # shows the double-encoded "JosÃ© GarcÃ­a" rendered as "José García".
+    transforms:
+      - {op: expr, python: "rt.repair_mojibake(row['customer'], 'customer', report)"}
+    decisions:
+      - {id: ENC-06, choice: "repair (latin-1 -> utf-8), counted", provenance: detected-confirmed, evidence: "target renders 'José García'"}
+  - target: amount
+    source: amt
+    transforms:
+      - {op: to_decimal, thousands_sep: ",", currency: true, accounting_negative: true}
+    decisions:
+      - {id: TYP-01, choice: "strip $ and commas; (n) = negative", provenance: detected-confirmed, evidence: "$1,234.56 and (500) in source; target 1234.56 / -500.00"}
+  - target: order_date
+    source: order_date
+    transforms:
+      - {op: to_date, formats: ["%m/%d/%Y"]}
+    decisions:
+      - {id: TYP-03, choice: MDY, provenance: detected-confirmed, evidence: "source values ambiguous MDY/DMY; target maps 01/02/2026 -> 2026-01-02 (MDY)"}
+  - target: is_active
+    source: active
+    transforms:
+      - {op: to_bool, mapping: {Y: true, N: false}}
+    decisions:
+      - {id: TYP-06, choice: "Y/N vocabulary", provenance: detected-confirmed, evidence: "target true/false from Y/N"}
+  - target: postal_code
+    source: zip
+    transforms: []
+    decisions:
+      - {id: TYP-07, choice: string, provenance: detected-confirmed, evidence: "leading zeros present (02134); target keeps as string"}
+  - target: notes
+    source: notes
+    transforms: []
+    sentinels: {values: ["N/A"], provenance: detected-confirmed}     # NUL-03: 'N/A' -> null; target row 3 notes is empty
+row_filters:
+  # STR-06 footer/total skip. NOT emitted by the current deterministic compiler
+  # (no row-filter emission); honored by the hand-generated pipeline. Kept here so the
+  # spec remains the source of truth for the behavior.
+  - {code: STR-06, action: skip, when_source: order_id, equals: "Total", provenance: detected-confirmed, evidence: "profiler flagged final row 'Total,,3222.56,,,,' as a footer/total"}
+unmapped:
+  unused_source_columns: []
+  unfilled_target_columns: []
+review_required:
+  # Surfaced for human review (chosen while user was away). None silently corrupt data.
+  - "ENC-06 (customer) — mojibake repair ENABLED for the customer column, matching the target sample. Confirm you want prior-mis-decode text auto-repaired rather than quarantined."
+  - "STR-02 (row 8, 'Carol') — ragged row (6 of 7 fields, missing 'notes') QUARANTINED, not admitted with empty notes. Confirm quarantine is the desired disposition for short rows."
+  - "TYP-03 (order_date) — interpreted MDY per the target sample. Every source date has day<=12, so DMY would silently produce different (valid-looking) dates. Confirm the source system is US-format."

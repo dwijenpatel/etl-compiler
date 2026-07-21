@@ -1,0 +1,3 @@
+order_id,customer_name,amount,order_date,is_active,postal_code
+20000003,Cora Diaz,310.25,,true,10001
+20000004,Dev Patel,1000.00,2026-05-03,true,60601

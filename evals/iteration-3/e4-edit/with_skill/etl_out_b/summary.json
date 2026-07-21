@@ -1,0 +1,12 @@
+{
+  "rows_in": 4,
+  "rows_out": 4,
+  "rows_quarantined": 0,
+  "distinct_error_types": 0,
+  "errors_by_type": {},
+  "warnings_by_type": {
+    "NUL-03:dt": 1
+  },
+  "exact_duplicate_rows": [],
+  "run_error": null
+}

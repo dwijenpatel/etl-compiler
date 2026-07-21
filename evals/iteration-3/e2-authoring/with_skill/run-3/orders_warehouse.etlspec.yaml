@@ -1,0 +1,104 @@
+etlspec: 0.1
+name: orders_warehouse
+taxonomy_version: 0.2
+
+# Vendor CSV export (orders_export.csv) -> warehouse orders format (target_orders.csv).
+# Authored unattended: every meaning-changing (`ask`-class) decision below was resolved
+# from the provided target output sample, which is authoritative ground truth for the
+# desired result. Two decisions remain genuinely heuristic and are listed in
+# review_required: ENC-06 (mojibake repair) and STR-06 (footer-row exclusion).
+
+source:
+  format: csv
+  encoding: {value: utf-8, provenance: detected-confirmed}   # ENC-01/02: UTF-8 file with a BOM; runtime strips the BOM
+  dialect:
+    delimiter: ","                                            # STR-01
+    quotechar: '"'
+  header: present                                             # STR-04: header present (names carry stray spaces, runtime trims)
+  expected_columns: [order_id, customer, amt, order_date, active, zip, notes]   # KEY-02/03
+
+target:
+  columns:                        # ordered; drives output column order (matches target_orders.csv)
+    - {name: order_id, type: string, nullable: false}
+    - {name: customer_name, type: string, nullable: false}
+    - {name: amount, type: decimal, scale: 2, nullable: true}
+    - {name: order_date, type: date, nullable: true}
+    - {name: is_active, type: boolean, nullable: true}
+    - {name: postal_code, type: string, nullable: true, max_length: 10}
+    - {name: notes, type: string, nullable: true}
+
+policies:                         # dataset-level; taxonomy IDs in comments
+  unicode_normalization: {value: NFC, provenance: default}          # ENC-03
+  strip_control_chars: {value: true, provenance: default}           # ENC-04
+  normalize_unicode_whitespace: {value: true, provenance: default}  # ENC-05
+  trim_whitespace: {value: true, provenance: default}               # NUL-02
+  empty_string_is_null: {value: true, provenance: default}          # NUL-01 (empty renders identically to null in CSV output)
+  null_propagation: {value: sql, provenance: default}               # NUL-05
+  datetime_rendering: {value: iso8601, provenance: default}         # TYP-05 (matches target's YYYY-MM-DD)
+  error_disposition: {value: quarantine, provenance: default}       # ERR-01
+  error_budget: {value: {percent: 5, min_rows: 100}, provenance: default}  # ERR-02
+  duplicate_rows: {value: keep, provenance: default}                # STR-05: keep-and-report exact duplicates (house default)
+
+mappings:
+  # order_id: kept as string (identifier, TYP-07). The {op: expr} raises STR-06 SkipRow
+  # for the trailing "Total,,3222.56,,,," footer row (order_id is not all-digits).
+  - target: order_id
+    source: order_id
+    transforms:
+      - {op: expr, python: "rt.skip_if(row['order_id'], row['order_id'] is not None and not row['order_id'].isdigit(), 'STR-06', 'footer or total row (non-numeric order_id)')"}
+    decisions:
+      - {id: TYP-07, choice: string, provenance: detected-confirmed, evidence: "identifier column; target keeps 10000001 verbatim"}
+      - {id: STR-06, choice: "exclude rows whose order_id is not all-digits (footer/total)", provenance: unconfirmed, evidence: "trailing row: Total,,3222.56,,,,"}
+
+  # customer_name: ENC-06 mojibake repair via runtime helper (target row 3: JosÃ© GarcÃ­a -> José García).
+  - target: customer_name
+    source: customer
+    transforms:
+      - {op: expr, python: "rt.repair_mojibake(row['customer'])"}
+    decisions:
+      - {id: ENC-06, choice: "repair double-encoded UTF-8 (opt-in; house default is pass-through)", provenance: unconfirmed, evidence: "JosÃ© GarcÃ­a -> José García in target sample"}
+
+  # amount: strip $ and thousands separators, (n) = negative; quantize to scale 2 (TYP-01/08).
+  - target: amount
+    source: amt
+    transforms:
+      - {op: to_decimal, thousands_sep: ",", currency: true, accounting_negative: true}
+    decisions:
+      - {id: TYP-01, choice: "strip $/commas; (n)=negative", provenance: detected-confirmed, evidence: "$1,234.56 -> 1234.56, (500) -> -500.00 in target"}
+
+  # order_date: MDY confirmed by target (01/02/2026 -> 2026-01-02), rendered ISO (TYP-03/05).
+  - target: order_date
+    source: order_date
+    transforms:
+      - {op: to_date, formats: ["%m/%d/%Y"]}
+    decisions:
+      - {id: TYP-03, choice: MDY, provenance: detected-confirmed, evidence: "01/02/2026 -> 2026-01-02 in target (Jan 2, i.e. %m/%d/%Y)"}
+
+  # is_active: Y/N -> true/false (TYP-06).
+  - target: is_active
+    source: active
+    transforms:
+      - {op: to_bool, mapping: {Y: true, N: false}}
+    decisions:
+      - {id: TYP-06, choice: "Y->true, N->false", provenance: detected-confirmed, evidence: "Y->true, N->false in target"}
+
+  # postal_code: string, leading zeros preserved (TYP-07); length-checked (TYP-11).
+  - target: postal_code
+    source: zip
+    transforms: []
+    decisions:
+      - {id: TYP-07, choice: string, provenance: detected-confirmed, evidence: "02134 leading zero preserved in target"}
+
+  # notes: free text; N/A is an in-band null sentinel -> null (NUL-03), empty/whitespace -> null (NUL-01/02).
+  - target: notes
+    source: notes
+    transforms: []
+    sentinels: {values: ["N/A"], provenance: detected-confirmed}     # NUL-03: target row 3 notes "N/A" -> empty
+    decisions:
+      - {id: NUL-03, choice: "N/A means null", provenance: detected-confirmed, evidence: "notes N/A -> empty in target"}
+
+unmapped:
+  unused_source_columns: []       # all 7 source columns are mapped
+  unfilled_target_columns: []     # all 7 target columns are filled
+
+review_required: [ENC-06, STR-06]  # unattended-mode heuristic decisions; see review notes

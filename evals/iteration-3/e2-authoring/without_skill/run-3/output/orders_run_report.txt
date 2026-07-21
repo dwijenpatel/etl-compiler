@@ -1,0 +1,51 @@
+ETL RUN REPORT — vendor orders_export.csv -> warehouse orders
+================================================================
+generated: 2026-07-20T22:51:38
+
+COUNTS
+----------------------------------------------------------------
+  source data rows read : 9
+  rows written (clean)  : 7
+  rows quarantined      : 1
+  blank rows skipped    : 1
+  exact duplicate rows  : 1 (kept, not dropped)
+  duplicate order_ids   : 1
+
+AUTO-FIXES APPLIED (counted)
+----------------------------------------------------------------
+  ENC mojibake repaired                    1
+  ENC normalized to NFC                    1
+  NUL sentinel -> empty                    1
+  STR control char removed                 2
+  STR non-breaking/odd space normalized    1
+  TYP accounting-negative parsed           1
+  TYP boolean mapped                       7
+  TYP currency symbol/grouping stripped    1
+  TYP date reformatted to ISO              7
+  blank row skipped                        1
+  footer/non-data row excluded             1
+  header BOM stripped                      1
+  header whitespace trimmed                1
+  ragged short row padded                  1
+
+QUARANTINED ROWS (see orders_rejected.csv)
+----------------------------------------------------------------
+  line 10: non-numeric order_id ('Total'); looks like a footer/summary row
+           raw: Total||3222.56||||
+
+REVIEW WHEN YOU ARE BACK  (choices I made without you)
+----------------------------------------------------------------
+  1. DATE FORMAT: all source dates are MM/DD/YYYY. Every value happens to have day<=12 too, so in isolation they are ambiguous (MM/DD vs DD/MM). I used MM/DD/YYYY because your target sample confirms it (01/02/2026 -> 2026-01-02, 03/04/2026 -> 2026-03-04). Confirm this is right.
+  2. DUPLICATES: order_id 10000005 appears twice (identical rows). I KEPT both copies rather than silently dropping one. If order_id is a unique key in the warehouse, you'll want to dedupe one of them.
+  3. 'Total' FOOTER ROW: the last data row was 'Total,,3222.56,...'. I treated any non-numeric order_id as a non-data/footer row and excluded it (quarantined, not in the clean output).
+  4. MOJIBAKE REPAIR: one customer name was double-encoded ('JosÃ© GarcÃ­a'). I repaired it to 'José García' to match your sample. Correct names were left untouched.
+  5. CONTROL CHAR IN NAME: one name had an embedded control character (vertical tab), which I removed, yielding 'BobSmith'. If it was meant to separate words it may need to be 'Bob Smith' — please confirm.
+  6. NOTES SENTINELS: 'N/A' and whitespace-only notes were converted to empty (matches your sample). Other free-text is preserved verbatim.
+  7. RAGGED ROW: order 10000006 was missing its trailing notes field; I padded notes to empty and kept the row.
+
+  Row-specific notes:
+    - order_id=10000005: customer_name contained a control character; it was removed (raw='Bob\x0bSmith' -> 'BobSmith'). If this was meant to be a word separator the name may need a space instead.
+    - source line 7: row had 6 fields (expected 7); missing trailing field(s) padded empty. raw=['10000006', 'Carol', '88', '11/12/2026', 'N', '02134']
+    - order_id=10000005: customer_name contained a control character; it was removed (raw='Bob\x0bSmith' -> 'BobSmith'). If this was meant to be a word separator the name may need a space instead.
+    - order_id=10000005: EXACT duplicate of the row from source line 6 (source line 8). Both copies were KEPT. If the warehouse treats order_id as a unique key, decide whether to drop one.
+

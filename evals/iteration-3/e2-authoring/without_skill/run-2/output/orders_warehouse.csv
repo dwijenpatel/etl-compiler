@@ -1,0 +1,7 @@
+order_id,customer_name,amount,order_date,is_active,postal_code,notes
+10000001,José,1234.56,2026-01-02,true,02134,ok
+10000002,Réné,-500.00,2026-03-04,false,90210,
+10000003,José García,250.00,2026-05-06,true,10001,
+10000004,Ann Lee,1000.00,2026-07-08,false,30301,
+10000005,BobSmith,75.00,2026-09-10,true,60601,fine
+10000006,Carol,88.00,2026-11-12,false,02134,

@@ -1,0 +1,44 @@
+{
+  "spec": "vendor_orders",
+  "taxonomy_version": "0.1",
+  "run_at": "2026-07-21T05:50:07.794820+00:00",
+  "input": {
+    "path": "/private/tmp/claude-501/-Users-dwijen-repos-etl-solved/ac2c1920-37ae-4107-81dd-bd1650d37bd8/scratchpad/iter3/r1-base/eval-inputs/vendor_orders_sample.csv",
+    "sha256": "afd65d6456e7d72a9e147a3a1d1bf545e6f60445e5a887a2b16d602044fdf922"
+  },
+  "rows": {
+    "read": 4,
+    "written": 4,
+    "quarantined": 0
+  },
+  "error_budget": {
+    "percent": 25,
+    "min_rows": 2,
+    "limit_rows": 2,
+    "over_budget": false
+  },
+  "errors_by_code": {},
+  "auto_fixes": [
+    {
+      "column": "amount",
+      "code": "FIX-CUR",
+      "count": 2
+    },
+    {
+      "column": "amount",
+      "code": "FIX-NEG",
+      "count": 1
+    },
+    {
+      "column": "order_date",
+      "code": "FIX-NULL",
+      "count": 1
+    }
+  ],
+  "outputs": {
+    "data": "vendor_orders.output.csv",
+    "errors": "vendor_orders.errors.jsonl"
+  },
+  "status": "completed",
+  "exit_code": 0
+}

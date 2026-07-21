@@ -1,0 +1,6 @@
+order_id,cust_name,amt,dt,active,zip
+20000001,Alice Wong,"$2,450.00",01/15/2026,Y,02134
+20000002,Ben Ortiz,(75),02/20/2026,N,90210
+20000003,Cora Diaz,310.25,N/A,Y,10001
+20000004,Dev Patel,"$1,000",03/05/2026,Y,60601
+20000007,Ana Silva,not-a-number,05/20/2026,Y,10001

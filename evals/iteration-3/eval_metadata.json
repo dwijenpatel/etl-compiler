@@ -1,0 +1,56 @@
+{
+  "iteration": 3,
+  "thesis": "Iteration-2 showed single-run correctness does not separate skill from baseline. Iteration 3 measures what only the skill claims: determinism, decision convergence, code stability, and minimal edit blast-radius.",
+  "experiments": [
+    {
+      "id": "E1",
+      "name": "regeneration-determinism",
+      "setup": "Regenerate a pipeline from the same unchanged vendor_orders.etlspec.yaml three times per arm, run each against the same sample.",
+      "arms": {
+        "with_skill": "3x compile_spec.py invocations (the skill's documented codegen path; mechanical)",
+        "without_skill": "3 independent isolated Opus agents regenerating from the same spec"
+      },
+      "assertions": [
+        "SKILL: 3/3 pipelines byte-identical; 3/3 run outputs (output.csv, errors.jsonl, summary.json) byte-identical",
+        "MEASURE baseline: pairwise pipeline/report identity; value-equivalence of outputs; report schema & error-code label consistency across the 3 runs"
+      ]
+    },
+    {
+      "id": "E2",
+      "name": "spec-authoring-convergence",
+      "setup": "The 17-trap orders_export.csv, unattended, three independent runs per arm (iteration-2 eval-0 prompt).",
+      "arms": {
+        "with_skill": "3 independent Opus agents following the skill (profile -> spec -> compile)",
+        "without_skill": "3 independent isolated Opus agents"
+      },
+      "assertions": [
+        "Decision agreement across the 3 runs per arm: date format, mojibake repair on/off+flagged, duplicate disposition, ragged disposition, footer handling",
+        "Error-code label stability: same failure -> same code string across runs (skill: taxonomy IDs by construction; baseline: measured)",
+        "Output value agreement on the 6 loadable rows"
+      ]
+    },
+    {
+      "id": "E3",
+      "name": "variant-robustness",
+      "setup": "Mechanical, no agents: run each arm's E1 artifact over 4 variants of vendor_orders_sample.csv, each planting one taxonomy problem ABSENT from the original sample: (v1) ragged row STR-02, (v2) unparseable date TYP-03, (v3) non-numeric amount TYP-01, (v4) overlong postal_code TYP-11.",
+      "assertions": [
+        "SKILL pipeline: each planted problem quarantined with the correct taxonomy code; rows_in reconciles (accounting completeness); exit 2; raw row preserved",
+        "MEASURE baseline pipelines: crash/coerce/drop/quarantine per variant; accounting reconciliation; code labels"
+      ]
+    },
+    {
+      "id": "E4",
+      "name": "edit-propagation",
+      "setup": "One decision changes: order_date format MDY -> DMY.",
+      "arms": {
+        "with_skill": "edit the spec's one decision line, recompile (mechanical), rerun",
+        "without_skill": "1 Opus agent asked to apply the same change to its own E1 pipeline"
+      },
+      "assertions": [
+        "SKILL: pipeline diff confined to the one mapping line + spec-hash header; output diff confined to order_date column; nothing else changes",
+        "MEASURE baseline: diff size/blast radius; whether outputs changed beyond order_date; whether run-report metadata reflects the change"
+      ]
+    }
+  ],
+  "model": "opus-4.8 for all agent runs (comparability with iteration 2); baselines isolated (no repo access)"
+}

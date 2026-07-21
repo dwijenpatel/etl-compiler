@@ -1,4 +1,0 @@
-reason,source_line,raw_fields
-"ragged row: 6 fields, expected 7",7,10000006 | Carol | 88 | 11/12/2026 | N | 02134
-exact duplicate of an earlier row (same order_id + identical content); kept first,8,10000005 | BobSmith | 75 | 09/10/2026 | Y | 60601 | fine
-non-numeric order_id (footer/summary?): 'Total',10,Total |  | 3222.56 |  |  |  | 

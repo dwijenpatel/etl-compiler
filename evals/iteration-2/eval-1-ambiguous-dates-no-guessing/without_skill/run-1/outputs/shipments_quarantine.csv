@@ -1,2 +1,0 @@
-src_line,error_code,error_message,raw_row
-7,MISSING_REQUIRED,shipment_id is empty but column is NOT NULL,|04/05/2026|22.10|UPS|Y
