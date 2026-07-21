@@ -183,7 +183,7 @@ Two shipped mechanisms are worth importing regardless of the default question:
 
 The profiler emits `ask`-class findings **per column**. On a 9,074-column indicator matrix
 that was 9,073 questions; on a routine 43-column NYC file it is dozens. An interview cannot
-ask them one at a time. CLAUDE.md already suspected this for NUL-01; the corpus shows it is
+ask them one at a time. AGENTS.md already suspected this for NUL-01; the corpus shows it is
 **general** across every per-column `ask` family (TYP-06, TYP-07, NUL-01, NUL-03). The
 SKILL.md interview step needs a **batching rule**: group homogeneous findings ("47 columns
 look like Y/N booleans — confirm the mapping once for all") rather than iterating. This is a

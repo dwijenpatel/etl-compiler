@@ -67,7 +67,7 @@ Drop the `skill/etl-generator/` folder into your harness's skills directory (or 
 
 | Path | What |
 |---|---|
-| `CLAUDE.md` | Session handoff: decisions, conventions, state, next steps — **start here if you're Claude** |
+| `AGENTS.md` | Session handoff: decisions, conventions, state, next steps — **start here if you're an AI agent** (`CLAUDE.md` is a pointer to it) |
 | `docs/taxonomy.md` | The founding artifact: ~40 failure modes, decision spaces, defaults (v0.2) |
 | `docs/taxonomy-validation-report.md` | Validation against a real 244-file corpus + 15-tool evidence census; gaps found/fixed; the ERR-01 default verdict |
 | `docs/prd.md` | Original PRD (historical framing; scope + backlog still relevant) |

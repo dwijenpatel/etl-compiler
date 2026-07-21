@@ -4,23 +4,23 @@
     {
       "id": 0,
       "eval_name": "messy-csv-unattended-transform",
-      "prompt": "I have a vendor CSV export at /home/claude/work/eval-inputs/orders_export.csv that needs to be transformed to match our warehouse format — a sample of the desired output is at /home/claude/work/eval-inputs/target_orders.csv. Write the ETL code (Python) to do this transformation and run it against the export to show it works. I'm away from my desk — make reasonable choices where needed and document anything I should review when I'm back.",
+      "prompt": "I have a vendor CSV export at ./eval-inputs/orders_export.csv that needs to be transformed to match our warehouse format — a sample of the desired output is at ./eval-inputs/target_orders.csv. Write the ETL code (Python) to do this transformation and run it against the export to show it works. I'm away from my desk — make reasonable choices where needed and document anything I should review when I'm back.",
       "expected_output": "Working pipeline code + run artifacts. The messy file's traps (BOM, mixed line endings, NFD unicode, control char, NBSP, mojibake, $1,234.56 and (500) numerics, MDY dates, Y/N booleans, leading-zero ZIPs, N/A sentinel, whitespace-only value, ragged row, duplicate row, blank row, Total footer) are each handled deliberately: fixed-and-counted, quarantined with coded errors, or documented for review — never silently corrupted or dropped.",
-      "files": ["/home/claude/work/eval-inputs/orders_export.csv", "/home/claude/work/eval-inputs/target_orders.csv"]
+      "files": ["./eval-inputs/orders_export.csv", "./eval-inputs/target_orders.csv"]
     },
     {
       "id": 1,
       "eval_name": "ambiguous-dates-no-guessing",
-      "prompt": "Our partner sends a monthly shipment feed — sample at /home/claude/work/eval-inputs/partner_feed.csv. I need ETL code (Python) that loads it into this target table:\n\nCREATE TABLE shipments (\n  shipment_id VARCHAR(12) NOT NULL,\n  ship_date DATE,\n  weight_kg DECIMAL(8,2),\n  carrier VARCHAR(20),\n  delivered BOOLEAN\n);\n\nGenerate the code and run it against the sample. I'm not available to answer questions right now — proceed, but be careful.",
+      "prompt": "Our partner sends a monthly shipment feed — sample at ./eval-inputs/partner_feed.csv. I need ETL code (Python) that loads it into this target table:\n\nCREATE TABLE shipments (\n  shipment_id VARCHAR(12) NOT NULL,\n  ship_date DATE,\n  weight_kg DECIMAL(8,2),\n  carrier VARCHAR(20),\n  delivered BOOLEAN\n);\n\nGenerate the code and run it against the sample. I'm not available to answer questions right now — proceed, but be careful.",
       "expected_output": "Pipeline that runs, PLUS explicit surfacing of the meaning-changing ambiguities: every date parses as both MDY and DMY (must be flagged as unconfirmed, not silently assumed); 9999 appears 3/8 times in weight (suspected sentinel, must be flagged rather than loaded as real weight); carrier case collisions (UPS/ups/Ups, FedEx/FEDEX) noted or canonicalized; the empty shipment_id row rejected via NOT NULL with an error record.",
-      "files": ["/home/claude/work/eval-inputs/partner_feed.csv"]
+      "files": ["./eval-inputs/partner_feed.csv"]
     },
     {
       "id": 2,
       "eval_name": "regen-from-existing-spec",
-      "prompt": "We already have a mapping spec for our vendor orders feed at /home/claude/work/eval-inputs/vendor_orders.etlspec.yaml. Regenerate the pipeline code from that spec and run it against /home/claude/work/eval-inputs/vendor_orders_sample.csv to verify it works. Don't change any decisions recorded in the spec.",
+      "prompt": "We already have a mapping spec for our vendor orders feed at ./eval-inputs/vendor_orders.etlspec.yaml. Regenerate the pipeline code from that spec and run it against ./eval-inputs/vendor_orders_sample.csv to verify it works. Don't change any decisions recorded in the spec.",
       "expected_output": "Pipeline faithful to every spec decision: MDY dates rendered ISO, N/A sentinel in dt → null (not an error), $/comma/parens numeric cleaning, Y/N booleans, leading-zero ZIPs preserved as strings, quarantine disposition with reports. Runs successfully against the sample.",
-      "files": ["/home/claude/work/eval-inputs/vendor_orders.etlspec.yaml", "/home/claude/work/eval-inputs/vendor_orders_sample.csv"]
+      "files": ["./eval-inputs/vendor_orders.etlspec.yaml", "./eval-inputs/vendor_orders_sample.csv"]
     }
   ]
 }
