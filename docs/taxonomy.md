@@ -7,10 +7,11 @@
 
 **Changelog**
 - **v0.2** (2026-07-20, minor — additions only, no default changed): added **TYP-12**
-  (magnitude/scale-suffixed numerics), from the corpus validation pass (NOAA damage
-  fields). Validation findings, coverage gaps, and open default-change proposals are in
-  [taxonomy-validation-report.md](taxonomy-validation-report.md). External evidence corpus:
-  `~/repos/etl-evidence`.
+  (magnitude/scale-suffixed numerics), from a validation pass over a 244-file corpus of
+  real messy data (NOAA damage fields motivated the entry). Full validation findings,
+  coverage-gap proposals, and the ERR-01 default verdict live in the maintainer's
+  local artifacts (`docs/taxonomy-validation-report.md` and the evidence corpus — not
+  distributed with the repo).
 - **v0.1** (2026-07-17): founding taxonomy, 40 entries.
 
 ---

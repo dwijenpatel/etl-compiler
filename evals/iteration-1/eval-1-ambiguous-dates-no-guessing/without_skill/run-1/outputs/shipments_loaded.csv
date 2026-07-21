@@ -1,8 +1,0 @@
-shipment_id,ship_date,weight_kg,carrier,delivered
-SH-0001,,12.50,UPS,true
-SH-0002,,,UPS,false
-SH-0003,,8.25,FedEx,true
-SH-0004,,,UPS,false
-SH-0005,,140.00,FedEx,true
-SH-0007,,,DHL,false
-SH-0008,,3.75,UPS,true

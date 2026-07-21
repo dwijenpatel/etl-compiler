@@ -4,3 +4,12 @@ __pycache__/
 etl_out/
 *.skill
 _to_delete/
+
+# Local development artifacts — kept on the maintainer's machine, not distributed.
+# A customer clone contains: the skill, tests (+ evals/inputs fixtures), the
+# current eval results, taxonomy.md, README, AGENTS.md.
+docs/*
+!docs/taxonomy.md
+corpus/
+examples/
+evals/iteration-1/

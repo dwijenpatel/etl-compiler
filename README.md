@@ -6,7 +6,7 @@ etl-solved generates correct, conformant data-transformation code by walking a *
 
 ## The problem with how ETL gets built today
 
-Bad data is the norm, not the exception: **~26% of open-government CSVs fail a naive parse**, **~20% of CSVs on GitHub use a non-standard dialect**, and a single tool silently autocorrupting gene names left errors in **~30% of scanned genomics papers**. Yet the tools that ingest this data each fail *differently*, and mostly *silently* — verified by direct testing of 15 shipping tools (methodology, sources, and grading in the [taxonomy validation report](docs/taxonomy-validation-report.md)):
+Bad data is the norm, not the exception: **~26% of open-government CSVs fail a naive parse**, **~20% of CSVs on GitHub use a non-standard dialect**, and a single tool silently autocorrupting gene names left errors in **~30% of scanned genomics papers**. Yet the tools that ingest this data each fail *differently*, and mostly *silently* — verified by direct testing and a primary-sourced census of 15 shipping tools (maintained in the project's evidence corpus; frequency numbers above from Mitlöhner et al. 2016, van den Burg et al. 2019, and Abeysooriya et al. 2021):
 
 - **Dataframe parsers silently coerce.** Put one bad value in a numeric column and pandas turns the whole column to strings; DuckDB and pyarrow turn a 20-digit ID into `1e+32` — precision gone, no error, no warning. The corruption ships downstream wearing a clean face.
 - **Warehouse loaders abort the whole batch.** Snowflake (`ABORT_STATEMENT`) and BigQuery (`maxBadRecords=0`) default to failing the entire load on the first bad row — one dirty cell in ten million rows stops the pipeline.
@@ -48,12 +48,16 @@ Three properties make the output trustworthy: the **spec** is a complete, audita
 ## Try it in 30 seconds
 
 ```bash
-# See the profiler detect 17 planted failure modes:
-python3 skill/etl-generator/scripts/profile.py examples/messy-sample/messy_sample.csv
+# 1. Profile a genuinely filthy vendor export (BOM, mojibake, NFD unicode, control
+#    chars, ambiguous MDY dates, $-and-parens numerics, ragged/duplicate/footer rows):
+python3 skill/etl-generator/scripts/profile.py evals/inputs/orders_export.csv
 
-# Run a generated-style pipeline over the same filthy file:
-python3 examples/messy-sample/smoke_pipeline.py
-# → exit 2 (completed with quarantined rows); inspect examples/messy-sample/etl_out/
+# 2. Compile a recorded spec into a pipeline — deterministically, no model involved —
+#    and run it against its sample:
+cp skill/etl-generator/assets/etl_runtime.py .
+python3 skill/etl-generator/scripts/compile_spec.py evals/inputs/vendor_orders.etlspec.yaml -o vendor_orders_pipeline.py
+python3 vendor_orders_pipeline.py evals/inputs/vendor_orders_sample.csv --out-dir etl_out
+# → exit 0; inspect etl_out/ (output.csv, summary.json, manifest.json)
 ```
 
 Everything is stdlib-only Python. No dependencies.
@@ -68,20 +72,18 @@ Drop the `skill/etl-generator/` folder into your harness's skills directory (or 
 
 | Path | What |
 |---|---|
-| `AGENTS.md` | Session handoff: decisions, conventions, state, next steps — **start here if you're an AI agent** (`CLAUDE.md` is a pointer to it) |
+| `skill/etl-generator/` | **The product**: the skill (Agent Skills standard) — workflow, references, profiler, deterministic compiler, runtime |
 | `docs/taxonomy.md` | The founding artifact: ~40 failure modes, decision spaces, defaults (v0.2) |
-| `docs/taxonomy-validation-report.md` | Validation against a real 244-file corpus + 15-tool evidence census; gaps found/fixed; the ERR-01 default verdict |
-| `docs/prd.md` | Original PRD (historical framing; scope + backlog still relevant) |
-| `docs/brainstorm-log.md` | Why the project is shaped this way |
-| `docs/eval-report-iteration-1.md` · `-2.md` | Benchmarks vs. baseline; why single-run assertions don't separate them and what to measure next |
-| `skill/etl-generator/` | The skill (Agent Skills standard): workflow, references, profiler, runtime |
-| `corpus/` | Reproducible messy-data corpus + profiler audit harness (taxonomy validation) |
-| `tests/` | Runtime + profiler unit suite (`python3 -m unittest discover -s tests`) |
-| `examples/messy-sample/` | End-to-end runnable demo |
-| `evals/` | Eval inputs + iteration-1 and iteration-2 results |
+| `tests/` | Runtime + profiler + compiler unit suite (`python3 -m unittest discover -s tests`) |
+| `evals/` | Eval inputs (also test fixtures) + current benchmark results (`evals/iteration-2/benchmark.md`) |
+| `AGENTS.md` | Contributor/agent handoff: decisions, conventions, state, next steps (`CLAUDE.md` is a pointer to it) |
+
+Development artifacts (validation corpus, historical eval iterations, design logs,
+detailed reports, runnable examples) live on the maintainer's machine and are not
+distributed — see the ignore rules in `.gitignore`.
 
 ## Status
 
-**v0.2** — taxonomy, profiler, and runtime hardened and validated against reality. The runtime has a real unit-test suite (55 tests); the taxonomy was validated against a 244-file corpus of genuinely messy real-world data plus a graded, primary-sourced census of 15 shipping ETL tools (the competitive claims above come from it). Six profiler detection bugs found on real portal files were fixed; a new failure mode (magnitude-suffixed numerics) was added end-to-end. The one load-bearing default question — quarantine-vs-fail-loud — was settled by a dedicated adversarial evidence pass (verdict: keep quarantine; see the validation report).
+**v0.2** — taxonomy, profiler, and runtime hardened and validated against reality. Everything ships with a real unit-test suite; the taxonomy was validated against a 244-file corpus of genuinely messy real-world data plus a graded, primary-sourced census of 15 shipping ETL tools (the competitive claims above come from it). Six profiler detection bugs found on real portal files were fixed; a new failure mode (magnitude-suffixed numerics) was added end-to-end. The one load-bearing default question — quarantine-vs-fail-loud — was settled by a dedicated adversarial evidence pass (verdict: keep quarantine).
 
 Eval iteration 2 (contract-level assertions, isolated baselines) found that a strong model satisfies the *contract* unaided on single runs — so the skill's real value is determinism, stable taxonomy codes, and a tested shared runtime, which single-run scoring can't capture. That conclusion is now built: the **deterministic `spec → pipeline.py` compiler** ships in the skill (`scripts/compile_spec.py`, stdlib-only, fail-loud spec validation, byte-identical regeneration). **Next:** the determinism-focused eval that exercises it.

@@ -33,10 +33,10 @@ CLAUDE.md                  ← pointer that imports this file (Claude Code conve
 README.md                  ← human-facing overview
 docs/
   taxonomy.md              ← THE founding artifact (canonical copy), v0.2
-  taxonomy-validation-report.md ← 3-stream validation findings + ERR-01 verdict
-  prd.md                   ← original product PRD (historical note at top; still useful for scope + P1/P2 backlog)
-  brainstorm-log.md        ← how the strategy evolved; decisions and their rationale
-  eval-report-iteration-1.md / -2.md ← eval results and what to measure next
+  taxonomy-validation-report.md ← [local-only] 3-stream validation findings + ERR-01 verdict
+  prd.md                   ← [local-only] original product PRD
+  brainstorm-log.md        ← [local-only] how the strategy evolved; decisions + rationale
+  eval-report-iteration-1.md / -2.md ← [local-only] eval analysis and what to measure next
 skill/etl-generator/       ← the Agent Skill (open standard; self-contained)
   SKILL.md                 ← workflow instructions
   references/              ← taxonomy copy, spec-format.md, codegen-guide.md
@@ -44,13 +44,19 @@ skill/etl-generator/       ← the Agent Skill (open standard; self-contained)
   scripts/compile_spec.py  ← deterministic spec → pipeline.py compiler (stdlib-only, fail-loud)
   assets/etl_runtime.py    ← the shared runtime (stdlib-only), v0.2.0
   evals/evals.json         ← eval prompts + expectations (relative paths)
-corpus/                    ← reproducible messy-data corpus + profiler audit harness
-tests/                     ← runtime + profiler unit suite (keep green)
-examples/messy-sample/     ← runnable end-to-end demo (see its README)
+corpus/                    ← [local-only] reproducible messy-data corpus + audit harness
+tests/                     ← runtime + profiler + compiler unit suite (keep green)
+examples/messy-sample/     ← [local-only] runnable end-to-end demo
 evals/
-  inputs/                  ← eval input files (messy CSVs, a spec, samples)
-  iteration-1/ iteration-2/ ← full eval results per iteration
+  inputs/                  ← eval input files (messy CSVs, a spec, samples) — also test fixtures
+  iteration-2/             ← current eval results (iteration-1/ is [local-only])
 ```
+
+**[local-only]** = untracked development artifacts (see `.gitignore`): present on the
+maintainer's machine, absent from a fresh clone — a customer clone is just the skill +
+taxonomy + tests + current eval. Do not add tracked links pointing at local-only paths.
+The external evidence corpus backing taxonomy/default decisions is likewise local:
+`~/repos/etl-evidence` (see the memory/handoff notes).
 
 ## Current state (verified working)
 
@@ -63,7 +69,7 @@ evals/
 
 - **Runtime v0.2.0** (`etl_runtime.py`): trims now counted (TYP-10/NUL-02, ERR-04); `to_bool` casefold acceptances counted; manifest carries `spec_version`/`spec_sha256`/`generator_version` (ERR-06); **STR-05 exact-duplicate detection** (keep-and-report default, `drop_exact` explicit); run-errors return exit 1 *with* reports (ERR-05, was bare traceback); `to_decimal(magnitude=True)` for TYP-12. Backed by `tests/test_etl_runtime.py` (real unit suite — the "tested runtime" premise is now fact, not aspiration).
 - **Taxonomy v0.2** (both copies synced): added **TYP-12** (magnitude/scale-suffixed numerics). Validation done via a real corpus, NOT the 5-file plan — see below.
-- **Taxonomy validation** (`docs/taxonomy-validation-report.md` — READ THIS before taxonomy work): 3 evidence streams — (A) profiler audit over 244 real files (`corpus/`, reproducible), (B) literature/incidents + (D) 15-tool census, both in the **evidence corpus at `~/repos/etl-evidence`** (evidence-kit format, retrieval-grade). Findings: taxonomy *categories* held up (no entry unused, one gap closed as TYP-12, rest deferred as not-yet-finite); the *profiler* was the weak link (6 detection bugs found + fixed + tested: empty-file crash, TYP-06 over-fire, STR-06 preamble, TYP-03 dotted dates, NUL-03 sentinels, ENC-02 doubled-BOM).
+- **Taxonomy validation** (`docs/taxonomy-validation-report.md`, [local-only] — READ THIS before taxonomy work when present): 3 evidence streams — (A) profiler audit over 244 real files (`corpus/`, reproducible), (B) literature/incidents + (D) 15-tool census, both in the **evidence corpus at `~/repos/etl-evidence`** (evidence-kit format, retrieval-grade). Findings: taxonomy *categories* held up (no entry unused, one gap closed as TYP-12, rest deferred as not-yet-finite); the *profiler* was the weak link (6 detection bugs found + fixed + tested: empty-file crash, TYP-06 over-fire, STR-06 preamble, TYP-03 dotted dates, NUL-03 sentinels, ENC-02 doubled-BOM).
 - **ERR-01 default RESOLVED (adversarial pass, 2026-07-20): keep quarantine.** Corpus pass 2 (`~/repos/etl-evidence/external/error-disposition-defaults/`, distilled). Content-vs-movement crux resolved: fail-loud defaults fire on content too, but tools split into 4 poles (fail-loud / annotate-and-keep / silent-coerce / quarantine) — none quarantine, and the most-used parsers *silently coerce* content errors, so quarantine is strictly better there. Non-default follow-ups the evidence supports (not yet done): promote ERR-01 option (c) "annotate" to first-class with Airbyte's `_airbyte_meta {field,change,reason}` shape; adopt DuckDB `reject_errors` schema for ERR-03(i); consider an ADF-style `redirect` disposition.
 - **Interview batching DONE**: profiler emits `interview_groups` (homogeneous per-column ask-findings collapsed — 9k→1 on the wide file); SKILL.md drives the interview from it.
 - **Eval iteration 2 DONE** (`evals/iteration-2/`, `docs/eval-report-iteration-2.md`): v0.2 reruns, contract-level assertions, isolated baselines. **skill 19/19 = baseline 19/19** — a strong isolated Opus baseline passes even the hard contract assertions unaided. The skill's real value (determinism, stable taxonomy codes, tested runtime, editable spec) is NOT measurable on single runs. **Iteration 3 must measure determinism/consistency, not single-run correctness** (harness sketched in the report).
@@ -78,7 +84,7 @@ evals/
 5. **Extract the runtime into a proper package** (`pip install etl-solved-runtime`) — the unit-test suite now exists (`tests/`), so packaging is the remaining step.
 6. **TypeScript runtime + target**; **SQL/dbt target** (analyst-serving surface). Sequenced after the Python path is solid.
 
-Runtime/profiler test suite lives in `tests/` (`python3 -m unittest discover -s tests`) — 55 tests, keep it green. Corpus audit: `python3 corpus/audit.py` after profiler changes.
+Test suite lives in `tests/` (`python3 -m unittest discover -s tests`) — runtime + profiler + compiler, keep it green. Corpus audit ([local-only]): `python3 corpus/audit.py` after profiler changes.
 
 ## Things to NOT do
 
