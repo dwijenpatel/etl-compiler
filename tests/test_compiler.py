@@ -528,5 +528,74 @@ class TestCompilerValidation(unittest.TestCase):
         self.assertIn("header", self._err(spec).lower())
 
 
+class TestFormulaInjectionPolicy(unittest.TestCase):
+    """ENC-08 / spec format 0.4: the formula_injection policy key — required
+    from 0.4, validated-and-emitted whenever present, defaulted (pass-through,
+    the taxonomy house default) for the pre-0.4 formats that predate it."""
+
+    POLICY = "  formula_injection: {value: neutralize, provenance: explicit}\n"
+    ANCHOR = "  duplicate_rows: {value: keep, provenance: default}\n"
+
+    def _spec_text(self, version, policy_line=""):
+        return (MINI_SPEC.replace("etlspec: 0.2", f"etlspec: {version}")
+                .replace(self.ANCHOR, self.ANCHOR + policy_line))
+
+    def _compile(self, text):
+        spec = cs.load_etlspec(text)
+        return cs.compile_spec(spec, spec_bytes=text.encode(),
+                               spec_filename="mini.etlspec.yaml")
+
+    def test_pre_04_spec_without_key_still_compiles(self):
+        code = self._compile(self._spec_text("0.2"))
+        self.assertNotIn("formula_injection", code)  # runtime default applies
+
+    def test_04_spec_without_key_fails_naming_it(self):
+        with self.assertRaises(cs.SpecError) as ctx:
+            self._compile(self._spec_text("0.4"))
+        self.assertIn("policies.formula_injection", str(ctx.exception))
+
+    def test_04_key_emitted_into_config(self):
+        code = self._compile(self._spec_text("0.4", self.POLICY))
+        self.assertIn("'formula_injection': 'neutralize'", code)
+
+    def test_unknown_value_rejected_with_decision_space(self):
+        bad = "  formula_injection: {value: strip, provenance: explicit}\n"
+        with self.assertRaises(cs.SpecError) as ctx:
+            self._compile(self._spec_text("0.4", bad))
+        self.assertIn("ENC-08", str(ctx.exception))
+
+    def test_pre_04_spec_declaring_key_is_validated_and_emitted_not_dropped(self):
+        code = self._compile(self._spec_text("0.2", self.POLICY))
+        self.assertIn("'formula_injection': 'neutralize'", code)
+        bad = "  formula_injection: {value: strip, provenance: explicit}\n"
+        with self.assertRaises(cs.SpecError):
+            self._compile(self._spec_text("0.2", bad))
+
+    def test_compiled_neutralize_pipeline_prefixes_output_end_to_end(self):
+        import csv as csvmod
+        import json as jsonmod
+        import shutil
+        import subprocess
+        import tempfile
+        code = self._compile(self._spec_text("0.4", self.POLICY))
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with open(os.path.join(tmp, "mini_pipeline.py"), "w") as f:
+            f.write(code)
+        for rt_file in ("etl_runtime.py", "etl_coercers.py"):  # two-file runtime
+            shutil.copy(os.path.join(REPO, "skill", "etl-generator", "assets",
+                                     rt_file), tmp)
+        with open(os.path.join(tmp, "in.csv"), "w", encoding="utf-8", newline="") as f:
+            f.write("id,name,note\n1,=2+2,x\n2,-500,y\n")
+        p = subprocess.run(["python3", "mini_pipeline.py", "in.csv", "--out-dir", "out"],
+                           cwd=tmp, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rows = list(csvmod.reader(open(os.path.join(tmp, "out", "output.csv"))))
+        self.assertEqual(rows[1][1], "'=2+2")   # neutralized, counted
+        self.assertEqual(rows[2][1], "-500")    # plain negative untouched
+        summary = jsonmod.load(open(os.path.join(tmp, "out", "summary.json")))
+        self.assertEqual(summary["warnings_by_type"].get("ENC-08:name"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

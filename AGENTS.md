@@ -32,7 +32,7 @@ AGENTS.md                  ← you are here (canonical agent instructions)
 CLAUDE.md                  ← pointer that imports this file (Claude Code convention)
 README.md                  ← human-facing overview
 docs/
-  taxonomy.md              ← THE founding artifact (canonical copy), v0.3
+  taxonomy.md              ← THE founding artifact (canonical copy), v0.4
   taxonomy-validation-report.md ← [local-only] 3-stream validation findings + ERR-01 verdict
   prd.md                   ← [local-only] original product PRD
   brainstorm-log.md        ← [local-only] how the strategy evolved; decisions + rationale
@@ -41,9 +41,9 @@ skill/etl-generator/       ← the Agent Skill (open standard; self-contained)
   SKILL.md                 ← workflow instructions
   references/              ← taxonomy copy, spec-format.md, codegen-guide.md
   scripts/profile.py       ← working profiler (stdlib-only); emits findings keyed by taxonomy IDs
-  scripts/compile_spec.py  ← deterministic spec → pipeline.py compiler (stdlib-only, fail-loud), v0.4.0
+  scripts/compile_spec.py  ← deterministic spec → pipeline.py compiler (stdlib-only, fail-loud), v0.5.0
   assets/etl_coercers.py   ← runtime core (deterministic, effect-confined; mypy-strict)
-  assets/etl_runtime.py    ← runtime I/O driver (re-exports the core), v0.6.0
+  assets/etl_runtime.py    ← runtime I/O driver (re-exports the core), v0.7.0
   evals/evals.json         ← eval prompts + expectations (relative paths)
 corpus/                    ← [local-only] reproducible messy-data corpus + audit harness
 tests/                     ← runtime + profiler + compiler unit suite (keep green)
@@ -78,26 +78,18 @@ The external evidence corpus backing taxonomy/default decisions is likewise loca
 - **Compiler-coverage gap CLOSED (runtime 0.3.0, compiler 0.2.0, spec format 0.2):** upstreamed the agent-written `repair_mojibake` (ENC-06, signature-gated, never lossy, report-counted) and `skip_if` (STR-06) into the runtime; compiler emits `repair_mojibake` + `concat` (NUL-05 sql nulls) as first-class ops, declarative `skip_rows:` rules (regex on raw value → counted SkipRow guards), and passes `report` into `expr` helpers; `split` stays declined (miss-semantics have no taxonomy home — relates to the deferred embedded-values candidate). SKILL.md gained the artifact-naming convention. Proof: `evals/inputs/orders_export.etlspec.yaml` — the 17-trap file fully compiler-expressible, end-to-end test pins exact accounting (9→6+1, ENC-06 ×1, STR-06 ×2, STR-05 ×1, STR-02 ×1).
 - **ERR-01 follow-ups DONE (runtime 0.4.0, compiler 0.3.0, spec format 0.3):** `annotate` promoted to a first-class disposition (ERR-01 option c, evidence-backed): content failures NULL the field, ledger `{field, change: NULLED, reason: <taxonomy id>}` to `changes.jsonl` (Airbyte `_airbyte_meta.changes` shape, our vocabulary), aggregate in `summary.annotations_by_type`, row loads, exit 2. STR-02 (structural) and NUL-04 (declared non-nullable) never annotate — they quarantine (the content-vs-movement crux, applied). Unknown disposition = SpecError at compile + RunError at run — no silent fallback. Compiler now emits per-field `FIELD_TRANSFORMS` + `_row_guards` (annotate needs field granularity; quarantine/fail-fast unchanged semantics). `errors.jsonl` records adopt DuckDB `reject_errors` fields: `column_idx` + verbatim `csv_line` (byte offsets deliberately not adopted — stdlib csv exposes none). 107 tests.
 - **Charset detection + ERR-07 + load-time hardening DONE (2026-07-21; taxonomy 0.3, runtime 0.6.0, compiler 0.4.0):** (1) ENC-01 non-UTF-8 bytes now get RANKED candidate encodings (shift_jis/euc_jp/gb18030/cp1252/latin-1) scored by decoded-text plausibility (C1-control fingerprint discriminates CJK-misread-as-Latin-1); still ask-class, evidence carries all candidates; the JP corpus files now profile as shift_jis with readable headers. (2) **ERR-07** (new taxonomy entry, minor bump to 0.3, copies synced): unexpected row-level exception quarantines the row and continues (raw preserved, csv_line intact); ERR-02 end-of-run/all-rows-failed promotes systemic breakage to exit 1; fail-fast honors first-occurrence abort; annotate NEVER repairs an unattributable failure into clean output (whole row quarantines). (3) Load-time control-char rejection in ALL spec strings (incl. U+2028/29) with a path-precise SpecError — comment injection now impossible by construction; `expr.python` stays the one exempt, sanctioned channel; `_cmt` remains defense-in-depth.
+- **Review backlog CLOSED (2026-07-23; taxonomy 0.4, runtime 0.7.0, compiler 0.5.0, spec format 0.4):** (1) **ENC-08** spreadsheet formula injection (new taxonomy entry — ENC-07 was already taken by literal escapes): ask-class, default pass-through-and-flag; opt-in `policies.formula_injection: neutralize` prefixes `'` to at-risk output cells at render time (`=`/`@` always; `+`/`-` only with a non-numeric tail — plain signed numerics and bare dashes never touched), counted per column per ERR-04; profiler detects formula-leading source values (grouped ask); unknown policy value = SpecError + RunError; the key is REQUIRED in spec ≥ 0.4, pre-0.4 specs compile with the pass-through default. (2) **Datetime detection**: profiler strips a time/zone tail before date analysis, so `08.08.2018 00:00` now fires TYP-03, and naive datetimes (incl. ISO date+time) fire a new TYP-04 ask; offset/Z-aware values don't. Dotted dates now require a 4-digit year (`1.2.10` version numbers no longer TYP-03). (3) **Report durability**: all reports (errors/changes/quarantine/summary/manifest) go through one `_atomic_write` (temp + flush + fsync + replace) plus a best-effort directory fsync — a crash can no longer leave a truncated summary.json. (4) Profiler noise: `FOOTER_KEYWORDS` word-boundary ("Totally Organic" ≠ total row); `rows_profiled` now counts only non-blank data rows below the true header. 158 tests.
 - **Eval iteration 3 DONE (determinism — first separation): skill 4/4 properties, baseline 0/4.** `evals/iteration-3/{results.json,benchmark.md}`; analysis in `docs/eval-report-iteration-3.md` [local-only]. E1 regen×3: skill byte-identical 3/3; baseline 0/3 pipelines/report-schemas (but 3/3 output VALUES — the spec alone pins data; the skill's margin is the operational contract + zero-model regen). E2 authoring×3: skill decision- and output-identical 3/3; baseline 0/3 (dup kept/dropped/kept, ragged padded 3/3, JSON report 1/3). E3 unseen variants: skill 4/4 exact taxonomy codes; a baseline misassigned 2/4 plausible-looking codes. E4 edit: skill 1-line diff + ERR-02 catches a wrong-for-data edit; baseline's clean edit sits on a runtime reading the same budget spec oppositely. **Compiler-coverage limit found:** 2/3 authoring runs hand-generated (ENC-06 repair + STR-06 footer-skip outside compiler vocabulary) — see next steps.
 
-## Code-review backlog (2026-07-21 multi-agent review; deferred, not bugs-in-flight)
+## Code-review backlog (2026-07-21 multi-agent review)
 
-- **CSV formula injection (ERR/output).** `_render` writes fields beginning `= + - @`
-  verbatim; opening output.csv in Excel/Sheets executes them. This is a *meaning-changing
-  output transform* with no taxonomy home — do it right: add a taxonomy entry (e.g. ENC-07
-  "spreadsheet formula injection"), an `ask`/policy-gated neutralization (prefix `'`, count
-  it), never a blanket prefix (negatives legitimately lead with `-`). Needs runtime + spec.
-- **Datetime-format detection** in the profiler: `DATE_SLASH_RE` only matches pure dates, so
-  `08.08.2018 00:00` (German datetime) flags no TYP-03/04. Extend detection to date+time.
-- **Report-write atomicity + fsync** (durability, not correctness): reports written
-  non-atomically; a crash mid-`summary.json` truncates it. Route reports through the same
-  temp+replace helper as output.csv.
-- Minor profiler noise deferred: TYP-03 false-positive on dotted version numbers (`1.2.10`);
-  `FOOTER_KEYWORDS` prefix-matching (`Totally`); `rows_profiled` counts preamble/blank rows.
+**CLOSED 2026-07-23** (see current state): formula injection (landed as **ENC-08** — the
+review note said "e.g. ENC-07" but that ID was already taken by literal escapes), datetime
+detection, report atomicity+fsync, and the minor profiler noise items are all done. Still
+open, deliberately:
+
 - Streaming (multi-GB inputs) stays a non-goal (whole-file read); revisit only if needed.
-- ~~Deeper altitude items~~ **DONE 2026-07-21** (see current state): ERR-07
-  quarantine-of-unexpected-row-errors and load-time control-char rejection both landed.
-  Still open: the runtime header-scan block (`missing`/`extra`/`col_index`/dup-headers)
+- The runtime header-scan block (`missing`/`extra`/`col_index`/dup-headers)
   is O(cols²) — fine at tens, seconds at thousands; de-quadratic with a
   `Counter(header)` if wide files become real.
 

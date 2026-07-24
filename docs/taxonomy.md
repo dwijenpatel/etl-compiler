@@ -1,11 +1,17 @@
 # ETL Failure-Mode Taxonomy
 
-**Version:** 0.3 (draft)
+**Version:** 0.4 (draft)
 **Status:** Founding artifact for `etl-generator`
 **Author:** Dwijen Patel
-**Date:** July 17, 2026 (v0.1); July 20, 2026 (v0.2); July 21, 2026 (v0.3)
+**Date:** July 17, 2026 (v0.1); July 20, 2026 (v0.2); July 21, 2026 (v0.3); July 23, 2026 (v0.4)
 
 **Changelog**
+- **v0.4** (2026-07-23, minor — addition only, no default changed): added **ENC-08**
+  (spreadsheet formula injection). Motivation: the runtime wrote output fields beginning
+  `=` `+` `-` `@` verbatim; opening output.csv in Excel/Sheets executes them (OWASP "CSV
+  injection"). Neutralization is a meaning-changing OUTPUT transform, so it needs a
+  taxonomy home, an opt-in policy, and per-column counting — never a blanket prefix
+  (negatives legitimately lead with `-`). From the 2026-07-21 code-review backlog.
 - **v0.3** (2026-07-21, minor — addition only, no default changed): added **ERR-07**
   (unexpected row-level failure). Motivation: the runtime's only net for unanticipated
   exceptions was run-level ERR-05, so one buggy custom expression or unforeseen data
@@ -103,6 +109,13 @@ Each entry has: **ID** (stable, used as runtime error/warning code), **What** (t
 - Options: (a) unescape; (b) keep verbatim.
 - Default: (b) keep, flag for confirmation when pervasive.
 - Class: `ask` when pervasive; otherwise none.
+
+**ENC-08 · Spreadsheet formula injection (output hardening)**
+- What: Output cells beginning `=`, `+`, `-`, `@` (or a stray TAB/CR) are executed as formulas when the produced CSV is opened in Excel, LibreOffice, or Google Sheets — a value like `=HYPERLINK(...)` or `=cmd|...` exfiltrates data or runs commands (OWASP "CSV injection"). Unlike the rest of ENC this is an **output** concern: the risk exists only when a spreadsheet user opens the produced file.
+- Detect: profiler counts formula-leading source values per column — first char `=`/`@` always; `+`/`-` only when the value is not a plain signed numeric (negatives legitimately lead with `-`).
+- Options: (a) pass through verbatim — the output is data for machine consumers; (b) neutralize — prefix a literal `'` to at-risk cells at write time, counted per column per this ID.
+- Default: (a) pass through and **flag** — neutralization changes bytes and would corrupt the file for downstream parsers, so it is opt-in (`policies.formula_injection: neutralize`, spec format ≥ 0.4) for outputs destined for spreadsheet users. Plain signed numerics (`-500`, `+3.14`, `-1,234.56`) are never at risk and never touched.
+- Class: `ask` when detected.
 
 ---
 

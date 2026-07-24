@@ -665,5 +665,109 @@ class TestRunPipeline(unittest.TestCase):
         self.assertEqual(summary["run_error"]["code"], "ENC-01")
 
 
+class TestEnc08NeutralizeFormula(unittest.TestCase):
+    """ENC-08: opt-in spreadsheet-formula neutralization — never a blanket prefix."""
+
+    def test_formula_leading_values_prefixed_and_counted(self):
+        report = rt.RunReport()
+        self.assertEqual(rt.neutralize_formula("=SUM(A1:A9)", "c", report), "'=SUM(A1:A9)")
+        self.assertEqual(rt.neutralize_formula("@handle", "c", report), "'@handle")
+        self.assertEqual(rt.neutralize_formula("-2+3", "c", report), "'-2+3")
+        self.assertEqual(report.warnings[("c", "ENC-08")], 3)
+
+    def test_plain_signed_numerics_never_touched(self):
+        # Negatives legitimately lead with '-'; prefixing them corrupts data.
+        report = rt.RunReport()
+        for v in ("-500", "+3.14", "-1,234.56", "-0.5", "-2.00E-02"):
+            self.assertEqual(rt.neutralize_formula(v, "amt", report), v)
+        self.assertEqual(sum(report.warnings.values()), 0)
+
+    def test_minus_inf_is_neutralized_it_really_is_a_formula_to_excel(self):
+        # corpus case (frictionless number-test.csv): Excel turns -INF into #NAME?
+        report = rt.RunReport()
+        self.assertEqual(rt.neutralize_formula("-INF", "c", report), "'-INF")
+        self.assertEqual(report.warnings[("c", "ENC-08")], 1)
+
+    def test_bare_sign_empty_and_plain_text_untouched(self):
+        report = rt.RunReport()
+        for v in ("-", "+", "", "hello", "a=b"):
+            self.assertEqual(rt.neutralize_formula(v, "c", report), v)
+        self.assertEqual(sum(report.warnings.values()), 0)
+
+
+class TestEnc08Pipeline(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.out_dir = os.path.join(self.dir.name, "out")
+        self.path = os.path.join(self.dir.name, "in.csv")
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write("id,name\n1,=1+2\n2,-500\n3,ok\n")
+
+    def _cfg(self, policies):
+        return {"name": "t", "encoding": "utf-8", "delimiter": ",",
+                "expected_columns": ["id", "name"],
+                "output_columns": ["id", "name"], "policies": policies}
+
+    def _out_rows(self):
+        with open(os.path.join(self.out_dir, "output.csv"), encoding="utf-8") as f:
+            return list(csv.reader(f))
+
+    def test_neutralize_policy_prefixes_at_risk_cells_only_and_counts(self):
+        res = rt.run_pipeline(input_path=self.path, out_dir=self.out_dir,
+                              config=self._cfg({"formula_injection": "neutralize"}),
+                              transform_row=_passthrough_transform(["id", "name"]))
+        self.assertEqual(res.exit_code, 0)
+        rows = self._out_rows()
+        self.assertEqual(rows[1][1], "'=1+2")
+        self.assertEqual(rows[2][1], "-500")   # plain negative untouched
+        self.assertEqual(rows[3][1], "ok")
+        with open(os.path.join(self.out_dir, "summary.json"), encoding="utf-8") as f:
+            summary = json.load(f)
+        self.assertEqual(summary["warnings_by_type"].get("ENC-08:name"), 1)
+
+    def test_default_is_pass_through_verbatim(self):
+        res = rt.run_pipeline(input_path=self.path, out_dir=self.out_dir,
+                              config=self._cfg({}),
+                              transform_row=_passthrough_transform(["id", "name"]))
+        self.assertEqual(res.exit_code, 0)
+        self.assertEqual(self._out_rows()[1][1], "=1+2")
+        with open(os.path.join(self.out_dir, "summary.json"), encoding="utf-8") as f:
+            summary = json.load(f)
+        self.assertNotIn("ENC-08:name", summary["warnings_by_type"])
+
+    def test_unknown_formula_policy_fails_loud_never_silently_falls_back(self):
+        res = rt.run_pipeline(input_path=self.path, out_dir=self.out_dir,
+                              config=self._cfg({"formula_injection": "strip"}),
+                              transform_row=_passthrough_transform(["id", "name"]))
+        self.assertEqual(res.exit_code, 1)
+        self.assertEqual(_run_error(res.report)["code"], "ENC-08")
+
+
+class TestReportDurability(unittest.TestCase):
+    """Reports go through the same temp+fsync+replace path as output.csv: a
+    crash mid-write can never leave a truncated report in place."""
+
+    def test_no_temp_droppings_and_all_reports_present_after_quarantining_run(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        path = os.path.join(d.name, "in.csv")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("id,name\n1,a\n2\n3,c\n")   # ragged row 3 -> quarantine
+        out_dir = os.path.join(d.name, "out")
+        res = rt.run_pipeline(input_path=path, out_dir=out_dir,
+                              config={"name": "t", "encoding": "utf-8",
+                                      "delimiter": ",",
+                                      "expected_columns": ["id", "name"],
+                                      "output_columns": ["id", "name"],
+                                      "policies": {}},
+                              transform_row=_passthrough_transform(["id", "name"]))
+        self.assertEqual(res.exit_code, 2)
+        files = set(os.listdir(out_dir))
+        self.assertFalse([f for f in files if f.endswith(".tmp")], files)
+        self.assertLessEqual({"output.csv", "errors.jsonl", "quarantine.csv",
+                              "summary.json", "manifest.json"}, files)
+
+
 if __name__ == "__main__":
     unittest.main()

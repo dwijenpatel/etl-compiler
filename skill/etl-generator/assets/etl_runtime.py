@@ -27,7 +27,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal as Decimal
-from typing import Callable, Mapping, Sequence, TypedDict
+from typing import Callable, Mapping, Sequence, TextIO, TypedDict
 
 from etl_coercers import (
     ISO8601_DATE as ISO8601_DATE,
@@ -49,6 +49,7 @@ from etl_coercers import (
     clean_text as clean_text,
     concat as concat,
     format_datetime as format_datetime,
+    neutralize_formula as neutralize_formula,
     not_null as not_null,
     repair_mojibake as repair_mojibake,
     resolve_null as resolve_null,
@@ -60,7 +61,7 @@ from etl_coercers import (
     to_int as to_int,
 )
 
-RUNTIME_VERSION = "0.6.0"
+RUNTIME_VERSION = "0.7.0"
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +88,7 @@ class PoliciesDict(TypedDict, total=False):
     error_disposition: str
     error_budget: ErrorBudgetDict
     duplicate_rows: str
+    formula_injection: str
     sentinels: dict[str, list[str]]
 
 
@@ -145,6 +147,7 @@ def read_text_with_policy(path: str, encoding: str, report: RunReport) -> str:
 # ---------------------------------------------------------------------------
 
 DISPOSITIONS = ("quarantine", "fail-fast", "annotate")  # ERR-01 decision space
+FORMULA_POLICIES = ("pass-through", "neutralize")       # ENC-08 decision space
 
 
 def run_pipeline(*, input_path: str, out_dir: str, config: PipelineConfig,
@@ -194,6 +197,13 @@ def _run_pipeline(input_path: str, out_dir: str, config: PipelineConfig,
         raise RunError("ERR-01", "annotate disposition requires field_transforms "
                                  "(per-field granularity); regenerate the pipeline "
                                  "with compiler >= 0.3.0")
+    formula_policy = pol.get("formula_injection", "pass-through")  # ENC-08
+    if formula_policy not in FORMULA_POLICIES:
+        # Same contract as ERR-01: an unknown policy value means the spec and
+        # this runtime disagree about semantics — never a silent fallback.
+        raise RunError("ENC-08", f"unknown formula_injection policy "
+                                 f"{formula_policy!r} (this runtime supports "
+                                 f"{FORMULA_POLICIES})")
     run_transform = transform_row
     if run_transform is None:
         if not field_transforms:
@@ -277,7 +287,11 @@ def _run_pipeline(input_path: str, out_dir: str, config: PipelineConfig,
                         report.annotate_row(i, changes)
                 else:
                     out = run_transform(row, report)
-                out_rows.append([_render(out.get(c)) for c in out_columns])
+                rendered = [_render(out.get(c)) for c in out_columns]
+                if formula_policy == "neutralize":  # ENC-08: opt-in, counted
+                    rendered = [neutralize_formula(s, c, report)
+                                for c, s in zip(out_columns, rendered)]
+                out_rows.append(rendered)
             except (SkipRow, RowError):
                 raise
             except Exception as e:  # noqa: BLE001 — ERR-07: unexpected row-level
@@ -352,14 +366,18 @@ def _render(v: CellValue) -> str:
     return str(v)
 
 
-def _atomic_write_csv(path: str, header: Sequence[str],
-                      rows: Sequence[Sequence[str]]) -> None:
+def _atomic_write(path: str, write: Callable[[TextIO], None],
+                  *, newline: str | None = None) -> None:
+    """ERR-05 durability, shared by output AND reports: write to a temp file in
+    the same directory, flush + fsync, then atomically replace. A crash
+    mid-write can never leave a truncated summary.json (or any other artifact)
+    masquerading as a complete one."""
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(header)
-            w.writerows(rows)
+        with os.fdopen(fd, "w", newline=newline, encoding="utf-8") as f:
+            write(f)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -367,6 +385,32 @@ def _atomic_write_csv(path: str, header: Sequence[str],
         except OSError:
             pass
         raise
+
+
+def _fsync_dir(path: str) -> None:
+    """Persist the renames themselves (directory-entry durability). Best
+    effort: platforms that cannot fsync a directory (Windows) skip silently —
+    the temp+replace atomicity above does not depend on this."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _atomic_write_csv(path: str, header: Sequence[str],
+                      rows: Sequence[Sequence[str]]) -> None:
+    def write(f: TextIO) -> None:
+        w = csv.writer(f)
+        w.writerow(header)
+        w.writerows(rows)
+
+    _atomic_write(path, write, newline="")
 
 
 def _write_reports(out_dir: str, report: RunReport, config: PipelineConfig,
@@ -379,22 +423,24 @@ def _write_reports(out_dir: str, report: RunReport, config: PipelineConfig,
             os.unlink(os.path.join(out_dir, "output.csv"))
         except OSError:
             pass
-    with open(os.path.join(out_dir, "errors.jsonl"), "w", encoding="utf-8") as f:
-        for e in report.row_errors:
-            f.write(json.dumps(e) + "\n")
+    _atomic_write(os.path.join(out_dir, "errors.jsonl"),
+                  lambda f: f.writelines(json.dumps(e) + "\n"
+                                         for e in report.row_errors))
     if report.annotations:  # ERR-01(c): the per-row change ledger
-        with open(os.path.join(out_dir, "changes.jsonl"), "w", encoding="utf-8") as f:
-            for a in report.annotations:
-                f.write(json.dumps(a) + "\n")
+        _atomic_write(os.path.join(out_dir, "changes.jsonl"),
+                      lambda f: f.writelines(json.dumps(a) + "\n"
+                                             for a in report.annotations))
     if report.quarantined:
-        with open(os.path.join(out_dir, "quarantine.csv"), "w", newline="",
-                  encoding="utf-8") as f:
+        def write_quarantine(f: TextIO) -> None:
             w = csv.writer(f)
             w.writerow(["__row_number__", "__raw_row__"])
             for row_number, raw in report.quarantined:
                 w.writerow([row_number, json.dumps(raw)])
-    with open(os.path.join(out_dir, "summary.json"), "w", encoding="utf-8") as f:
-        json.dump(report.summary(), f, indent=2)
+
+        _atomic_write(os.path.join(out_dir, "quarantine.csv"), write_quarantine,
+                      newline="")
+    _atomic_write(os.path.join(out_dir, "summary.json"),
+                  lambda f: json.dump(report.summary(), f, indent=2))
     with open(input_path, "rb") as f:
         sha = hashlib.sha256(f.read()).hexdigest()
     # ERR-06: spec provenance — hash of the resolved config the pipeline embeds.
@@ -416,5 +462,6 @@ def _write_reports(out_dir: str, report: RunReport, config: PipelineConfig,
         "completed_at_utc": datetime.now(timezone.utc).strftime(ISO8601_DATETIME),
         "effective_policies": config.get("policies", {}),
     }
-    with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, default=str)
+    _atomic_write(os.path.join(out_dir, "manifest.json"),
+                  lambda f: json.dump(manifest, f, indent=2, default=str))
+    _fsync_dir(out_dir)

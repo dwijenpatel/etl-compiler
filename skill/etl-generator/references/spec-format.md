@@ -1,8 +1,8 @@
-# The .etlspec.yaml Format (v0.3)
+# The .etlspec.yaml Format (v0.4)
 
 The spec is the single source of truth for a pipeline: every mapping, every policy decision, with provenance. It must be complete enough to regenerate the pipeline without re-profiling or re-interviewing.
 
-**v0.2 additions** (backward compatible; the compiler accepts 0.1–0.3): the optional
+**v0.2 additions** (backward compatible; the compiler accepts 0.1–0.4): the optional
 top-level `skip_rows:` section (STR-06 confirmed row exclusions, declarative), and two new
 transform ops — `repair_mojibake` (ENC-06, opt-in, report-counted) and `concat` (NUL-05
 SQL null propagation).
@@ -24,6 +24,15 @@ skip_rows:                        # STR-06: confirmed non-data rows, matched on 
   - {column: order_id, pattern: '^\D', id: STR-06, reason: "footer/total row", provenance: detected-confirmed}
 ```
 
+**v0.4 addition — the `formula_injection` policy (ENC-08).** Output cells beginning
+`=` `+` `-` `@` execute as formulas when the produced CSV is opened in a spreadsheet
+(OWASP "CSV injection"). The policy takes `pass-through` (house default — the output is
+data for machine consumers, and prefixing would corrupt it) | `neutralize` (requires
+runtime ≥ 0.7.0: at-risk cells get a literal `'` prefix at write time, counted per column
+as ENC-08; plain signed numerics like `-500` are never at risk and never touched). The
+key is **required from format 0.4** (rule 1: every policy in every spec); formats 0.1–0.3
+predate it and still compile, with the runtime defaulting to pass-through.
+
 A complete worked v0.2 example (all 17 trap classes of the demo file): `evals/inputs/orders_export.etlspec.yaml` in the repo.
 
 ## Provenance values
@@ -37,9 +46,9 @@ Every decision carries `provenance`:
 ## Top-level structure
 
 ```yaml
-etlspec: 0.1                     # spec format version
+etlspec: 0.4                     # spec format version
 name: vendor_orders               # pipeline name (snake_case)
-taxonomy_version: 0.1             # taxonomy this spec was authored against
+taxonomy_version: 0.4             # taxonomy this spec was authored against
 
 source:
   format: csv
@@ -70,6 +79,7 @@ policies:                         # dataset-level; taxonomy IDs in comments
   error_disposition: {value: quarantine, provenance: default}       # ERR-01
   error_budget: {value: {percent: 5, min_rows: 100}, provenance: default}  # ERR-02
   duplicate_rows: {value: keep, provenance: default}                # STR-05: keep | drop_exact
+  formula_injection: {value: pass-through, provenance: default}     # ENC-08: pass-through | neutralize
 
 mappings:                         # one entry per target column
   - target: order_id

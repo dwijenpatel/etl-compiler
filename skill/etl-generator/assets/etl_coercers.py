@@ -24,7 +24,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Literal, Mapping, Sequence, TypedDict, TypeVar, cast
 
-TAXONOMY_VERSION = "0.3"
+TAXONOMY_VERSION = "0.4"
 ISO8601_DATE = "%Y-%m-%d"
 ISO8601_DATETIME = "%Y-%m-%dT%H:%M:%S%z"
 
@@ -455,6 +455,35 @@ def repair_mojibake(value: CellValue, column: str,
     if report is not None:  # ERR-04: auto-fixes are counted
         report.warn(column, "ENC-06")
     return repaired
+
+
+# ENC-08: a leading + or - is only a spreadsheet-formula risk when the value is
+# NOT a plain signed numeric — `-500`, `-1,234.56` and scientific `-2.00E-02`
+# all parse as numbers in every spreadsheet and must never be touched.
+# (`-INF` is NOT exempt: Excel reads it as a formula and mangles it to #NAME?.)
+_SIGNED_NUMBER_RE = re.compile(r"^[+-][0-9.,]*\d([eE][+-]?\d+)?$")
+
+
+def neutralize_formula(value: str, column: str,
+                       report: RunReport | None = None) -> str:
+    """ENC-08: prefix a literal apostrophe to a rendered output cell that a
+    spreadsheet would execute as a formula (leading `=` `@` TAB CR always;
+    `+`/`-` only for non-numeric values). OPT-IN — the taxonomy default is
+    pass-through-and-flag; a spec enables this via
+    `policies.formula_injection: neutralize` for outputs destined for
+    spreadsheet users. Counts one ENC-08 warning per neutralized cell (ERR-04).
+    """
+    if not value:
+        return value
+    ch = value[0]
+    # A bare "-"/"+" (len 1) is inert in every spreadsheet — common as a kept
+    # dash sentinel — so only a sign WITH a non-numeric tail is a risk.
+    if ch in "=@\t\r" or (ch in "+-" and len(value) > 1
+                          and not _SIGNED_NUMBER_RE.match(value)):
+        if report is not None:
+            report.warn(column, "ENC-08")
+        return "'" + value
+    return value
 
 
 def skip_if(value: T, condition: object, code: str = "STR-06", reason: str = "") -> T:

@@ -131,7 +131,7 @@ class SpecDict(TypedDict, total=False):
     unmapped: UnmappedDict
     review_required: list[object]
 
-COMPILER_VERSION = "0.4.0"
+COMPILER_VERSION = "0.5.0"
 
 
 class SpecError(Exception):
@@ -538,8 +538,15 @@ REQUIRED_KWARGS = {"expr": ("python",), "constant": ("value",),
 # split's miss-semantics have no taxonomy home yet (relates to the deferred
 # "embedded values" coverage candidate) — declined honestly, not half-shipped.
 UNSUPPORTED_OPS = {"split"}
-SUPPORTED_ETLSPEC = {"0.1", "0.2", "0.3"}   # 0.2: skip_rows + repair_mojibake/concat; 0.3: annotate
+# 0.2: skip_rows + repair_mojibake/concat; 0.3: annotate; 0.4: formula_injection
+SUPPORTED_ETLSPEC = {"0.1", "0.2", "0.3", "0.4"}
 DISPOSITIONS = {"quarantine", "fail-fast", "annotate"}  # ERR-01 (runtime >= 0.4.0 for annotate)
+# ENC-08 decision space (runtime >= 0.7.0 for neutralize). The policy key is
+# REQUIRED from spec format 0.4 (completeness: silence is a bug); formats 0.1–0.3
+# predate it and keep compiling — the runtime defaults to pass-through, which is
+# also the taxonomy house default, so old specs' behavior is unchanged.
+FORMULA_POLICIES = {"pass-through", "neutralize"}
+PRE_0_4_FORMATS = {"0.1", "0.2", "0.3"}
 
 
 _CONTROL_CHAR_RE = re.compile("[\x00-\x1f\x7f\u2028\u2029]")
@@ -599,7 +606,12 @@ def validate_spec(spec: SpecDict) -> dict[str, ColumnDict]:
              "source.expected_columns must be a non-empty list")
 
     pol = spec["policies"]
-    for key in REQUIRED_POLICIES:
+    policy_keys = list(REQUIRED_POLICIES)
+    # formula_injection (ENC-08): required from format 0.4; validated whenever
+    # present so an older spec that declares it is never silently dropped.
+    if "formula_injection" in pol or str(spec["etlspec"]) not in PRE_0_4_FORMATS:
+        policy_keys.append("formula_injection")
+    for key in policy_keys:
         _require(key in pol, f"policies.{key} is missing — every spec records every "
                              "policy, including defaults (spec-format rule 1)")
         entry = pol[key]
@@ -610,6 +622,10 @@ def validate_spec(spec: SpecDict) -> dict[str, ColumnDict]:
     _require(pol["error_disposition"]["value"] in DISPOSITIONS,
              f"policies.error_disposition {pol['error_disposition']['value']!r} "
              f"not in {sorted(DISPOSITIONS)} (ERR-01 decision space)")
+    if "formula_injection" in pol:
+        _require(pol["formula_injection"]["value"] in FORMULA_POLICIES,
+                 f"policies.formula_injection {pol['formula_injection']['value']!r} "
+                 f"not in {sorted(FORMULA_POLICIES)} (ENC-08 decision space)")
 
     cols = spec["target"].get("columns")
     _require(isinstance(cols, list) and cols, "target.columns must be a non-empty list")
@@ -829,7 +845,9 @@ def compile_spec(spec: SpecDict, *, spec_bytes: bytes, spec_filename: str) -> st
 
     # Values come from the (dynamically-typed) spec loader; validate_spec has
     # already enforced the shape, so this cast marks the checked boundary.
-    policies = cast("PoliciesDict", {k: pol[k]["value"] for k in REQUIRED_POLICIES})
+    policy_keys = REQUIRED_POLICIES + (["formula_injection"]  # ENC-08, spec >= 0.4
+                                       if "formula_injection" in pol else [])
+    policies = cast("PoliciesDict", {k: pol[k]["value"] for k in policy_keys})
     sentinels = {}
     for m in spec["mappings"]:
         sent = m.get("sentinels")

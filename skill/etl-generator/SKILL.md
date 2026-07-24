@@ -3,8 +3,8 @@ name: etl-generator
 description: Interactive ETL code generator built on a failure-mode taxonomy. Use this skill whenever the user wants to transform, map, convert, migrate, load, or clean tabular data (CSV/TSV) from one structure to another, wants ETL or data-pipeline code written, mentions mapping source data to a target schema/format, or asks for "a script to convert this file" — even if they never say "ETL". Also use it when the user provides an existing mapping spec (.etlspec.yaml) and wants the pipeline regenerated or modified, or when they complain about data quality issues (bad dates, nulls, weird characters, encoding problems) in a file they need to process. It profiles samples, interviews the user only about issues actually detected, records every decision in an auditable spec, and generates hardened Python whose edge-case handling lives in a tested runtime module.
 compatibility: Requires Python 3 (standard library only — no third-party packages) and the ability to run bundled scripts. Harness-agnostic; conforms to the Agent Skills open standard.
 metadata:
-  taxonomy-version: "0.3"
-  runtime-version: "0.6.0"
+  taxonomy-version: "0.4"
+  runtime-version: "0.7.0"
 ---
 
 # ETL Generator

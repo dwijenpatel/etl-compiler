@@ -105,7 +105,18 @@ PLAIN_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
 # Ambiguous D/M dates, separators / - or . (European dotted DD.MM.YYYY included). TYP-03.
 DATE_SLASH_RE = re.compile(r"^\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}$")
 DATE_SPLIT_RE = re.compile(r"[/.\-]")   # splits a matched date on its own separator(s)
-FOOTER_KEYWORDS = re.compile(r"(?i)^(sub)?total|^sum\b|^count\b|^generated|^report|^page \d")
+# A time-of-day (with optional zone) tail after a date: a datetime column must not
+# evade TYP-03/04 detection because of its time component (`08.08.2018 00:00`).
+DATETIME_TAIL_RE = re.compile(
+    r"[ T]\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?( ?[AaPp][Mm])?"
+    r"(?P<tz>Z| ?[+-]\d{2}:?\d{2})?$")
+ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")   # unambiguous order; TYP-04 only
+# ENC-08: formula-leading output risk. The numeric exemption mirrors the
+# runtime's _SIGNED_NUMBER_RE — a plain signed numeric (incl. scientific
+# notation) is a number to a spreadsheet, never a formula.
+SIGNED_NUMBER_RE = re.compile(r"^[+-][0-9.,]*\d([eE][+-]?\d+)?$")
+# Word boundaries: "Totally Organic Ltd" is a vendor, not a total row.
+FOOTER_KEYWORDS = re.compile(r"(?i)^(sub)?total\b|^sum\b|^count\b|^generated\b|^report\b|^page \d")
 
 
 def _is_blank_row(r: Sequence[str]) -> bool:
@@ -235,6 +246,15 @@ def _is_numeric_cell(v: str) -> bool:
     return bool(PLAIN_NUMBER_RE.match(v.replace(",", "").replace(" ", "")))
 
 
+def _plausible_date(v: str) -> bool:
+    """Corpus regression guard: dotted values with 2-digit 'years' are usually
+    version numbers (`1.2.10`), so when '.' is the ONLY separator, require a
+    4-digit year. Slash/dash dates keep accepting 2-digit years (`1/2/99`)."""
+    if "." in v and "/" not in v and "-" not in v:
+        return bool(re.search(r"\.\d{4}$", v))
+    return True
+
+
 def detect_preamble(rows: list[list[str]]) -> int:
     """STR-06: count leading report-style metadata/title rows above the real data.
     Two signals, both conservative (require real body rows to remain):
@@ -291,9 +311,12 @@ def detect_preamble(rows: list[list[str]]) -> int:
 
 
 def profile_structure(rows: list[list[str]], findings: list[Finding]
-                      ) -> tuple[list[str], dict[str, list[str | None]]]:
+                      ) -> tuple[list[str], dict[str, list[str | None]], int]:
+    """Returns (header, per-column values, n_data_rows) where n_data_rows counts
+    non-blank rows below the true header — preamble, header, and blank rows are
+    structure, not data, and must not inflate `rows_profiled`."""
     if not rows:
-        return [], {}
+        return [], {}, 0
     preamble = detect_preamble(rows)
     if preamble:
         findings.append(finding("STR-06", "ask",
@@ -349,15 +372,25 @@ def profile_structure(rows: list[list[str]], findings: list[Finding]
         cols[name or f"__col{ci}__"] = [r[ci] if ci < len(r) else None
                                         for r in data
                                         if any(f.strip() for f in r) and len(r) == width]
-    return stripped, cols
+    return stripped, cols, len(nonblank)
 
 
 # ---------------------------------------------------------------------- per-column
+
+def _is_formula_leading(v: str) -> bool:
+    """ENC-08: would a spreadsheet execute this value as a formula? `=`/`@`
+    always; `+`/`-` only with a non-numeric tail (a bare sign is inert, and
+    plain signed numerics are exactly what spreadsheets should see)."""
+    ch = v[0]
+    return ch in "=@" or (ch in "+-" and len(v) > 1
+                          and not SIGNED_NUMBER_RE.match(v))
+
 
 def profile_characters(name: str, values: list[str | None],
                        findings: list[Finding]) -> None:
     counts: Counter[str] = Counter()
     moji_examples: list[str] = []
+    formula_examples: list[str] = []
     for v in values:
         if not v:
             continue
@@ -371,11 +404,21 @@ def profile_characters(name: str, values: list[str | None],
             counts["ENC-06"] += 1
             if len(moji_examples) < 3:
                 moji_examples.append(v[:60])
+        if _is_formula_leading(v):
+            counts["ENC-08"] += 1
+            if len(formula_examples) < 3:
+                formula_examples.append(v[:60])
     for fid, n in counts.items():
         if fid == "ENC-06":
             findings.append(finding(fid, "ask",
                                     "likely mojibake (prior mis-decode); repair is opt-in",
                                     column=name, count=n, evidence=moji_examples))
+        elif fid == "ENC-08":
+            findings.append(finding(fid, "ask",
+                                    "formula-leading value(s) (= @ + -) — a spreadsheet would "
+                                    "execute these on open; neutralize in output? (default: pass through)",
+                                    column=name, count=n, evidence=formula_examples,
+                                    group_key="formula-leading"))
         else:
             findings.append(finding(fid, "fix", "character cleanup applies", column=name, count=n))
 
@@ -475,8 +518,20 @@ def profile_types(name: str, values: list[str | None],
                                     "uniform-width, high-cardinality digits — identifier? keep as string",
                                     column=name, group_key="uniform-id"))
 
-    # TYP-03 date format ambiguity
-    slashy = [v for v in vals if DATE_SLASH_RE.match(v)]
+    # TYP-03 date format ambiguity — a trailing time component is stripped
+    # first so datetime columns (`08.08.2018 00:00`) don't evade detection;
+    # naive datetimes (no offset/Z) additionally raise TYP-04.
+    slashy = []
+    naive_dt = 0
+    for v in vals:
+        tail = DATETIME_TAIL_RE.search(v)
+        core = v[:tail.start()].strip() if tail else v
+        is_dm_date = bool(DATE_SLASH_RE.match(core)) and _plausible_date(core)
+        if is_dm_date:
+            slashy.append(core)
+        if (tail and not tail.group("tz")
+                and (is_dm_date or ISO_DATE_RE.match(core))):
+            naive_dt += 1
     if slashy and len(slashy) / n > 0.6:
         mdy = dmy = both = bad = 0
         for v in slashy:
@@ -512,6 +567,12 @@ def profile_types(name: str, values: list[str | None],
             findings.append(finding("TYP-03", "ask",
                                     f"date format fully ambiguous ({both} values parse as both MDY and DMY) — must confirm",
                                     column=name, evidence={"ambiguous": both}))
+
+    # TYP-04: naive datetimes — the source timezone is never guessed.
+    if naive_dt and naive_dt / n > 0.6:
+        findings.append(finding("TYP-04", "ask",
+                                f"{naive_dt} naive datetime(s) with no UTC offset — declare the source timezone",
+                                column=name, count=naive_dt, group_key="naive-datetime"))
 
     # TYP-02 decimal locale
     eu_style = sum(1 for v in vals if re.match(r"^-?\d{1,3}(\.\d{3})+(,\d+)?$", v))
@@ -588,7 +649,7 @@ def profile_file(path: str, max_rows: int = MAX_ROWS_DEFAULT) -> ProfileResult:
         if i > max_rows:
             break
         rows.append(r)
-    header, cols = profile_structure(rows, findings)
+    header, cols, n_data_rows = profile_structure(rows, findings)
     for name, values in cols.items():
         profile_characters(name, values, findings)
         profile_nulls(name, values, findings)
@@ -601,7 +662,7 @@ def profile_file(path: str, max_rows: int = MAX_ROWS_DEFAULT) -> ProfileResult:
         "encoding": encoding,
         "delimiter": delim,
         "columns": header,
-        "rows_profiled": max(0, len(rows) - 1),
+        "rows_profiled": n_data_rows,
         "findings": findings,
         "interview_groups": group_findings(findings),
         "summary": {
