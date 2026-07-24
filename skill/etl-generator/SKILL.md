@@ -47,7 +47,7 @@ Consult `references/taxonomy.md` for each finding's decision space, default, and
 - `ask`-class findings: these are meaning-changing. Ask the user, showing the profiler's evidence ("`order_date` is ambiguous: all 240 values parse as both MDY and DMY — which is it?"). Batch related questions and pose them together (drive this from the profiler's `interview_groups`, which collapses identical per-column decisions into one question); if the harness offers a structured or multiple-choice question interface, use it, otherwise ask in plain text. Never guess on: date format ambiguity (TYP-03), decimal locale (TYP-02), sentinel values (NUL-03), timezone of naive datetimes (TYP-04).
 - Findings absent from the profile: take the default, record it with provenance `default`. Do not ask about them.
 
-**Unattended mode:** if there is no user to interview (batch/CI context, or the user has said "just make reasonable choices"), do not block. Choose the safest option for each `ask`-class finding (the one that quarantines rather than reinterprets data), mark those decisions `provenance: unconfirmed` in the spec, and list them prominently at the end so a human can review.
+**Unattended mode:** if there is no user to interview (batch/CI context, or the user has said "just make reasonable choices"), do not block. Choose the safest option for each `ask`-class finding (the one that quarantines rather than reinterprets data), mark every detected `ask`-class decision `provenance: unconfirmed` — even when the option chosen is the house default; `default` is reserved for findings the profiler did not detect — and list them prominently at the end so a human can review.
 
 ### Step 4 — Propose mappings
 
