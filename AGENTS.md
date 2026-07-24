@@ -32,7 +32,7 @@ AGENTS.md                  ← you are here (canonical agent instructions)
 CLAUDE.md                  ← pointer that imports this file (Claude Code convention)
 README.md                  ← human-facing overview
 docs/
-  taxonomy.md              ← THE founding artifact (canonical copy), v0.2
+  taxonomy.md              ← THE founding artifact (canonical copy), v0.3
   taxonomy-validation-report.md ← [local-only] 3-stream validation findings + ERR-01 verdict
   prd.md                   ← [local-only] original product PRD
   brainstorm-log.md        ← [local-only] how the strategy evolved; decisions + rationale
@@ -41,8 +41,9 @@ skill/etl-generator/       ← the Agent Skill (open standard; self-contained)
   SKILL.md                 ← workflow instructions
   references/              ← taxonomy copy, spec-format.md, codegen-guide.md
   scripts/profile.py       ← working profiler (stdlib-only); emits findings keyed by taxonomy IDs
-  scripts/compile_spec.py  ← deterministic spec → pipeline.py compiler (stdlib-only, fail-loud)
-  assets/etl_runtime.py    ← the shared runtime (stdlib-only), v0.2.0
+  scripts/compile_spec.py  ← deterministic spec → pipeline.py compiler (stdlib-only, fail-loud), v0.4.0
+  assets/etl_coercers.py   ← runtime core (deterministic, effect-confined; mypy-strict)
+  assets/etl_runtime.py    ← runtime I/O driver (re-exports the core), v0.6.0
   evals/evals.json         ← eval prompts + expectations (relative paths)
 corpus/                    ← [local-only] reproducible messy-data corpus + audit harness
 tests/                     ← runtime + profiler + compiler unit suite (keep green)
