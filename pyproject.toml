@@ -9,12 +9,14 @@ dev = ["mypy>=1.14"]
 
 # ---------------------------------------------------------------------------
 # Type checking. The gate is tests/test_typecheck.py (part of the unittest
-# suite). Strictness is a ratchet:
-#   - runtime (assets/*) + compiler (compile_spec): mypy --strict — the typed
-#     YAML loader (YamlValue/Line) and SpecDict contracts live in the compiler;
-#     validate-then-cast marks every checked boundary.
-#   - profiler + tests: default level with untyped bodies checked; the profiler
-#     is the remaining ratchet rung.
+# suite). ALL product modules are strict (the ratchet is fully closed):
+#   - runtime (etl_coercers/etl_runtime): CellValue + config/record TypedDicts
+#   - compiler (compile_spec): typed YAML loader (YamlValue/Line) + SpecDict
+#     contracts; validate-then-cast marks every checked boundary
+#   - profiler (profile): Finding/InterviewGroup/ProfileResult contracts
+#     (functional TypedDict syntax — "class"/"row-error" are contract keys)
+#   - tests: default level with untyped bodies checked (deliberate: test
+#     ergonomics over annotation ceremony; the product surface is the bar).
 # ---------------------------------------------------------------------------
 [tool.mypy]
 python_version = "3.10"
@@ -36,7 +38,7 @@ warn_redundant_casts = true
 # mypy's `strict` flag is global-only; per-module it must be spelled out.
 # This block IS --strict for the runtime modules (mypy --strict component flags).
 [[tool.mypy.overrides]]
-module = ["etl_runtime", "etl_coercers", "compile_spec"]
+module = ["etl_runtime", "etl_coercers", "compile_spec", "profile"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_calls = true

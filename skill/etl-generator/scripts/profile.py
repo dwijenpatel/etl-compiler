@@ -21,6 +21,52 @@ import re
 import sys
 import unicodedata
 from collections import Counter
+from typing import Sequence, TypedDict
+
+# ---------------------------------------------------------------------------
+# Typed vocabulary. Functional TypedDict syntax is required: "class" is a
+# Python keyword and "row-error" contains a hyphen — both are part of the
+# findings contract consumed by SKILL.md and the eval harnesses, so the JSON
+# shape wins over class-syntax convenience.
+# ---------------------------------------------------------------------------
+
+Finding = TypedDict("Finding", {
+    "id": str,            # taxonomy ID (e.g. "TYP-03")
+    "class": str,         # fix | ask | row-error | info
+    "message": str,
+    "column": str,
+    "count": int,
+    "evidence": object,   # heterogeneous per detector: examples, counts, pairs
+    "group_key": str,     # findings sharing (id, group_key) = one interview question
+}, total=False)
+
+InterviewGroup = TypedDict("InterviewGroup", {
+    "id": str,
+    "class": str,
+    "group_key": str | None,
+    "message": str,
+    "columns": list[str],
+    "evidence": dict[str, object],
+    "n_columns": int,
+}, total=False)
+
+ProfileSummary = TypedDict("ProfileSummary", {
+    "ask": int,           # raw ask findings (one per column)
+    "ask_questions": int, # grouped interview questions actually posed
+    "fix": int,
+    "row-error": int,
+})
+
+ProfileResult = TypedDict("ProfileResult", {
+    "file": str,
+    "encoding": str,
+    "delimiter": str,
+    "columns": list[str],
+    "rows_profiled": int,
+    "findings": list[Finding],
+    "interview_groups": list[InterviewGroup],
+    "summary": ProfileSummary,
+})
 
 MAX_ROWS_DEFAULT = 1000
 SNIFF_DELIMITERS = ",;\t|"       # candidate delimiters the sniffer tries (STR-01)
@@ -50,14 +96,16 @@ DATE_SPLIT_RE = re.compile(r"[/.\-]")   # splits a matched date on its own separ
 FOOTER_KEYWORDS = re.compile(r"(?i)^(sub)?total|^sum\b|^count\b|^generated|^report|^page \d")
 
 
-def _is_blank_row(r) -> bool:
+def _is_blank_row(r: Sequence[str]) -> bool:
     """A row is blank when every field is empty/whitespace — the STR-06 definition,
     shared so STR-05/STR-06 and the runtime stay aligned by construction, not comment."""
     return not any(f.strip() for f in r)
 
 
-def finding(fid, klass, message, column=None, count=None, evidence=None, group_key=None):
-    f = {"id": fid, "class": klass, "message": message}
+def finding(fid: str, klass: str, message: str, column: str | None = None,
+            count: int | None = None, evidence: object = None,
+            group_key: str | None = None) -> Finding:
+    f: Finding = {"id": fid, "class": klass, "message": message}
     if column is not None:
         f["column"] = column
     if count is not None:
@@ -73,7 +121,7 @@ def finding(fid, klass, message, column=None, count=None, evidence=None, group_k
 
 # ---------------------------------------------------------------------- bytes/encoding
 
-def profile_bytes(raw: bytes, findings: list) -> str:
+def profile_bytes(raw: bytes, findings: list[Finding]) -> str:
     encoding = "utf-8"
     if raw.startswith(b"\xef\xbb\xbf"):
         # Strip every leading UTF-8 BOM: corpus found files carrying two (a BOM
@@ -105,7 +153,7 @@ def profile_bytes(raw: bytes, findings: list) -> str:
     return encoding
 
 
-def profile_text(text: str, findings: list) -> str:
+def profile_text(text: str, findings: list[Finding]) -> str:
     terms = {"\r\n": text.count("\r\n")}
     terms["\r"] = text.count("\r") - terms["\r\n"]
     terms["\n"] = text.count("\n") - terms["\r\n"]
@@ -119,7 +167,7 @@ def profile_text(text: str, findings: list) -> str:
 
 # ---------------------------------------------------------------------- structure
 
-def sniff_dialect(text: str, findings: list):
+def sniff_dialect(text: str, findings: list[Finding]) -> str:
     sample = text[:8192]
     delim = ","
     try:
@@ -144,7 +192,7 @@ def _is_numeric_cell(v: str) -> bool:
     return bool(PLAIN_NUMBER_RE.match(v.replace(",", "").replace(" ", "")))
 
 
-def detect_preamble(rows: list) -> int:
+def detect_preamble(rows: list[list[str]]) -> int:
     """STR-06: count leading report-style metadata/title rows above the real data.
     Two signals, both conservative (require real body rows to remain):
 
@@ -199,7 +247,8 @@ def detect_preamble(rows: list) -> int:
     return 0
 
 
-def profile_structure(rows: list, findings: list):
+def profile_structure(rows: list[list[str]], findings: list[Finding]
+                      ) -> tuple[list[str], dict[str, list[str | None]]]:
     if not rows:
         return [], {}
     preamble = detect_preamble(rows)
@@ -262,7 +311,8 @@ def profile_structure(rows: list, findings: list):
 
 # ---------------------------------------------------------------------- per-column
 
-def profile_characters(name: str, values: list, findings: list):
+def profile_characters(name: str, values: list[str | None],
+                       findings: list[Finding]) -> None:
     counts: Counter[str] = Counter()
     moji_examples: list[str] = []
     for v in values:
@@ -287,7 +337,8 @@ def profile_characters(name: str, values: list, findings: list):
             findings.append(finding(fid, "fix", "character cleanup applies", column=name, count=n))
 
 
-def profile_nulls(name: str, values: list, findings: list):
+def profile_nulls(name: str, values: list[str | None],
+                  findings: list[Finding]) -> None:
     empties = sum(1 for v in values if v == "")
     ws_only = sum(1 for v in values if v is not None and v != "" and v.strip() == "")
     if empties:
@@ -314,7 +365,8 @@ def profile_nulls(name: str, values: list, findings: list):
                                 group_key="sentinel:" + ",".join(sorted(hits))))
 
 
-def profile_types(name: str, values: list, findings: list):
+def profile_types(name: str, values: list[str | None],
+                  findings: list[Finding]) -> None:
     vals = [v.strip() for v in values if v is not None and v.strip()]
     vals = [v for v in vals if v.casefold() not in KNOWN_SENTINELS]
     if not vals:
@@ -440,14 +492,14 @@ def profile_types(name: str, values: list, findings: list):
 
 # ---------------------------------------------------------------------- interview plan
 
-def group_findings(findings: list) -> list:
+def group_findings(findings: list[Finding]) -> list[InterviewGroup]:
     """Collapse homogeneous per-column `ask` findings into one interview question
     each, so elicitation scales (a 9,074-column file must not yield 9,073 boolean
     questions). Findings sharing (id, group_key) are the SAME decision across
     columns and merge; every affected column is listed (never silently dropped).
     Findings without a group_key pass through as singleton groups."""
-    groups: dict = {}
-    order = []
+    groups: dict[tuple[str, str], InterviewGroup] = {}
+    order: list[tuple[str, str]] = []
     for f in findings:
         if f["class"] != "ask":
             continue
@@ -477,9 +529,10 @@ def group_findings(findings: list) -> list:
 
 # ---------------------------------------------------------------------- main
 
-def profile_file(path: str, max_rows: int = MAX_ROWS_DEFAULT) -> dict:
-    findings: list = []
-    raw = open(path, "rb").read()
+def profile_file(path: str, max_rows: int = MAX_ROWS_DEFAULT) -> ProfileResult:
+    findings: list[Finding] = []
+    with open(path, "rb") as fh:
+        raw = fh.read()
     encoding = profile_bytes(raw, findings)
     while raw.startswith(b"\xef\xbb\xbf"):  # strip every leading BOM (see profile_bytes)
         raw = raw[3:]
@@ -517,7 +570,7 @@ def profile_file(path: str, max_rows: int = MAX_ROWS_DEFAULT) -> dict:
     }
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("path")
     ap.add_argument("--json", dest="json_out", help="write findings JSON here")
@@ -532,4 +585,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
