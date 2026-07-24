@@ -12,6 +12,7 @@ _SPEC = importlib.util.spec_from_file_location(
     "profile_mod",
     os.path.join(os.path.dirname(__file__), "..",
                  "skill", "etl-generator", "scripts", "profile.py"))
+assert _SPEC is not None and _SPEC.loader is not None
 prof = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(prof)
 

@@ -1,11 +1,20 @@
-"""etl_runtime — hardened primitives for generated ETL pipelines.
+"""etl_runtime — the I/O driver for pipelines produced by the etl-generator skill.
 
-This module is the single shared implementation of edge-case semantics for
-pipelines produced by the etl-generator skill. Every error/warning code refers
-to an entry in the ETL Failure-Mode Taxonomy (references/taxonomy.md in the
-skill). Generated pipelines stay thin; the semantics live here, once, tested.
+Two-module runtime, split on the effect boundary:
 
-Stdlib only — no third-party dependencies.
+  * `etl_coercers` — the deterministic core: cleaning, null resolution, type
+    coercion, the report accumulator. No I/O, no clock; the only effect is
+    counting into an explicitly-passed `RunReport`.
+  * `etl_runtime` (this file) — the impure shell: file reading, the row loop,
+    dispositions, atomic output, report/manifest writing (the one wall-clock
+    read lives in the manifest timestamp).
+
+Generated pipelines import ONLY `etl_runtime`; the core's public API is
+re-exported here, so `rt.to_decimal(...)` etc. keep working unchanged. The two
+files ship together (copy both beside the generated pipeline).
+
+Every error/warning code refers to an entry in the ETL Failure-Mode Taxonomy
+(references/taxonomy.md in the skill). Stdlib only — no third-party deps.
 """
 from __future__ import annotations
 
@@ -14,131 +23,91 @@ import hashlib
 import io
 import json
 import os
-import re
 import tempfile
-import unicodedata
-from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal as Decimal
+from typing import Callable, Mapping, Sequence, TypedDict
 
-RUNTIME_VERSION = "0.4.0"
-TAXONOMY_VERSION = "0.2"
-ISO8601_DATE = "%Y-%m-%d"
-ISO8601_DATETIME = "%Y-%m-%dT%H:%M:%S%z"
+from etl_coercers import (
+    ISO8601_DATE as ISO8601_DATE,
+    ISO8601_DATETIME as ISO8601_DATETIME,
+    TAXONOMY_VERSION as TAXONOMY_VERSION,
+    AnnotationRecord as AnnotationRecord,
+    CellValue as CellValue,
+    ChangeRecord as ChangeRecord,
+    DuplicateRecord as DuplicateRecord,
+    RowError as RowError,
+    RowErrorRecord as RowErrorRecord,
+    RunError as RunError,
+    RunErrorInfo as RunErrorInfo,
+    RunReport as RunReport,
+    SkipRow as SkipRow,
+    SummaryDict as SummaryDict,
+    check_length as check_length,
+    check_range as check_range,
+    clean_text as clean_text,
+    concat as concat,
+    format_datetime as format_datetime,
+    not_null as not_null,
+    repair_mojibake as repair_mojibake,
+    resolve_null as resolve_null,
+    skip_if as skip_if,
+    to_bool as to_bool,
+    to_date as to_date,
+    to_datetime as to_datetime,
+    to_decimal as to_decimal,
+    to_int as to_int,
+)
 
-
-# ---------------------------------------------------------------------------
-# Errors
-# ---------------------------------------------------------------------------
-
-class RowError(Exception):
-    """A row-level failure. code is a taxonomy ID (e.g. 'TYP-03')."""
-
-    def __init__(self, code: str, column: str, value, message: str):
-        self.code = code
-        self.column = column
-        self.value = value
-        self.message = message
-        super().__init__(f"{code} [{column}] {message} (value={value!r})")
-
-
-class RunError(Exception):
-    """A run-level failure. The run aborts; no partial output is written (ERR-05)."""
-
-    def __init__(self, code: str, message: str):
-        self.code = code
-        self.message = message
-        super().__init__(f"{code}: {message}")
-
-
-class SkipRow(Exception):
-    """Raise from transform_row to exclude a row per an explicit spec decision
-    (e.g. STR-06 confirmed footer/preamble rows). Counted as a warning, never silent."""
-
-    def __init__(self, code: str = "STR-06", reason: str = ""):
-        self.code = code
-        self.reason = reason
-        super().__init__(f"{code}: {reason}")
+RUNTIME_VERSION = "0.5.0"
 
 
 # ---------------------------------------------------------------------------
-# Report (ERR-03 / ERR-04 / ERR-06)
+# The pipeline-config contract (embedded by the compiler; consumed here).
+# total=False throughout: the driver reads with .get() defaults and fails loud
+# on genuinely required keys, tolerating hand-written partial configs.
 # ---------------------------------------------------------------------------
 
-@dataclass
-class RunReport:
-    rows_in: int = 0
-    rows_out: int = 0
-    row_errors: list = field(default_factory=list)      # per-row records
-    quarantined: list = field(default_factory=list)     # raw input rows (lists)
-    warnings: Counter = field(default_factory=Counter)  # (column, code) -> count
-    duplicates: list = field(default_factory=list)      # STR-05: exact-duplicate sightings
-    annotations: list = field(default_factory=list)     # ERR-01(c): per-row change ledgers
-    run_error: dict | None = None
+class ErrorBudgetDict(TypedDict, total=False):
+    """ERR-02: row-error tolerance before the run converts to hard failure."""
+    percent: float
+    min_rows: int
 
-    def warn(self, column: str, code: str, n: int = 1):
-        """ERR-04: every auto-fix is counted, never silent."""
-        if n:
-            self.warnings[(column or "<row>", code)] += n
 
-    def add_row_error(self, row_number: int, raw_row: list, err: RowError,
-                      expected_columns: list | None = None):
-        # Record shape adopts DuckDB's reject_errors design (ERR-03 i): stable
-        # error type + column index + the verbatim raw line, for reprocessing.
-        column_idx = None
-        if expected_columns and err.column in expected_columns:
-            column_idx = expected_columns.index(err.column)
-        buf = io.StringIO()
-        csv.writer(buf).writerow(raw_row)
-        self.row_errors.append({
-            "row_number": row_number,
-            "column": err.column,
-            "column_idx": column_idx,
-            "error_code": err.code,
-            "offending_value": None if err.value is None else str(err.value)[:500],
-            "message": err.message,
-            "csv_line": buf.getvalue().rstrip("\r\n"),
-        })
-        self.quarantined.append((row_number, raw_row))
+class PoliciesDict(TypedDict, total=False):
+    """Dataset-level policies, mirroring the spec's `policies:` block."""
+    unicode_normalization: str
+    strip_control_chars: bool
+    normalize_unicode_whitespace: bool
+    trim_whitespace: bool
+    empty_string_is_null: bool
+    null_propagation: str
+    datetime_rendering: str
+    error_disposition: str
+    error_budget: ErrorBudgetDict
+    duplicate_rows: str
+    sentinels: dict[str, list[str]]
 
-    def annotate_row(self, row_number: int, changes: list):
-        """ERR-01 option (c): ledger for a row that loaded with repaired fields.
-        Shape adopted from Airbyte's `_airbyte_meta.changes` ({field, change,
-        reason}); reasons are taxonomy IDs. Counted, never silent (ERR-04)."""
-        self.annotations.append({"row_number": row_number, "changes": changes})
 
-    def annotation_aggregates(self) -> dict:
-        agg: Counter = Counter()
-        for a in self.annotations:
-            for c in a["changes"]:
-                agg[(c["reason"], c["field"])] += 1
-        return {f"{code}:{col}": n for (code, col), n in sorted(agg.items())}
+class PipelineConfig(TypedDict, total=False):
+    """The resolved spec a generated pipeline embeds as its CONFIG constant."""
+    name: str
+    spec_version: str
+    generator_version: str
+    encoding: str
+    delimiter: str
+    quotechar: str
+    expected_columns: list[str]
+    output_columns: list[str]
+    policies: PoliciesDict
 
-    # -- aggregates (ERR-03 ii) --
-    def error_aggregates(self) -> dict:
-        agg: Counter = Counter()
-        for e in self.row_errors:
-            agg[(e["error_code"], e["column"])] += 1
-        return {f"{code}:{col}": n for (code, col), n in sorted(agg.items())}
 
-    def warning_aggregates(self) -> dict:
-        return {f"{code}:{col}": n
-                for (col, code), n in sorted(self.warnings.items(), key=lambda kv: kv[0][1])}
-
-    def summary(self) -> dict:
-        return {
-            "rows_in": self.rows_in,
-            "rows_out": self.rows_out,
-            "rows_quarantined": len(self.quarantined),
-            "distinct_error_types": len(self.error_aggregates()),
-            "errors_by_type": self.error_aggregates(),
-            "warnings_by_type": self.warning_aggregates(),
-            "rows_annotated": len(self.annotations),
-            "annotations_by_type": self.annotation_aggregates(),
-            "exact_duplicate_rows": self.duplicates,
-            "run_error": self.run_error,
-        }
+# A row after driver-side cleaning/null resolution, as seen by transforms.
+CleanRow = dict[str, str | None]
+TransformRowFn = Callable[[CleanRow, RunReport], Mapping[str, CellValue]]
+FieldTransform = tuple[str, Callable[[CleanRow, RunReport], CellValue]]
+RowGuardsFn = Callable[[CleanRow, RunReport], None]
 
 
 @dataclass
@@ -146,305 +115,6 @@ class RunResult:
     exit_code: int
     report: RunReport
     out_dir: str
-
-
-# ---------------------------------------------------------------------------
-# Text cleaning (ENC-03 / ENC-04 / ENC-05) and null resolution (NUL-01/02/03)
-# ---------------------------------------------------------------------------
-
-_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-# Unicode whitespace variants -> ASCII space; zero-width & BOM chars -> removed. (ENC-05)
-_UNICODE_SPACE_RE = re.compile(
-    "[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]"
-)
-_ZERO_WIDTH_RE = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
-
-
-def clean_text(value: str | None, column: str, report: RunReport | None,
-               *, normalization: str = "NFC", strip_control: bool = True,
-               normalize_ws: bool = True) -> str | None:
-    """Apply ENC-class fixes per policy. Counts every change as a warning."""
-    if value is None:
-        return None
-    v = value
-    if normalization:  # ENC-03
-        nv = unicodedata.normalize(normalization, v)
-        if nv != v and report:
-            report.warn(column, "ENC-03")
-        v = nv
-    if strip_control:  # ENC-04
-        nv = _CONTROL_CHARS_RE.sub("", v)
-        if nv != v and report:
-            report.warn(column, "ENC-04")
-        v = nv
-    if normalize_ws:  # ENC-05
-        nv = _UNICODE_SPACE_RE.sub(" ", v)
-        nv = _ZERO_WIDTH_RE.sub("", nv)
-        if nv != v and report:
-            report.warn(column, "ENC-05")
-        v = nv
-    return v
-
-
-def resolve_null(value: str | None, column: str, report: RunReport | None,
-                 *, trim: bool = True, empty_is_null: bool = True,
-                 sentinels: tuple[str, ...] = ()) -> str | None:
-    """NUL-01/02/03 resolution. Returns None or the (possibly trimmed) string."""
-    if value is None:
-        return None
-    v = value
-    if trim:
-        t = v.strip()
-        if t != v:
-            if report:
-                # ERR-04: every trim is counted — NUL-02 when the value was
-                # whitespace-only, TYP-10 when content survived the trim.
-                report.warn(column, "NUL-02" if t == "" else "TYP-10")
-            v = t
-    if sentinels and v in sentinels:
-        if report:
-            report.warn(column, "NUL-03")
-        return None
-    if empty_is_null and v == "":
-        return None
-    return v
-
-
-# ---------------------------------------------------------------------------
-# Coercers (TYP-*). All pass None through. All raise RowError on failure.
-# ---------------------------------------------------------------------------
-
-_PAREN_NEG_RE = re.compile(r"^\((.*)\)$")
-_CURRENCY_RE = re.compile(r"^[\s]*[$€£¥₹]")
-# TYP-12: magnitude/scale suffixes (10.00K, 1.2M). Applied only when the spec confirms it.
-_MAGNITUDE = {"k": 3, "m": 6, "b": 9, "g": 9, "t": 12}
-
-
-def _clean_numeric_string(v: str, column: str, *, thousands_sep, currency,
-                          accounting_negative, percent, magnitude=False
-                          ) -> tuple[str, bool, int]:
-    """TYP-01/TYP-12: apply confirmed numeric-cleaning rules.
-    Returns (cleaned, is_percent_applied, magnitude_exponent)."""
-    s = v.strip()
-    negative = False
-    if accounting_negative:
-        m = _PAREN_NEG_RE.match(s)
-        if m:
-            s = m.group(1).strip()
-            negative = True
-    if s.endswith("-") and accounting_negative:  # trailing-minus variant
-        s = s[:-1].strip()
-        negative = True
-    if currency:
-        s = _CURRENCY_RE.sub("", s).strip()
-    is_pct = False
-    if percent and s.endswith("%"):
-        s = s[:-1].strip()
-        is_pct = True
-    exp = 0
-    if magnitude and s and s[-1].lower() in _MAGNITUDE:  # TYP-12
-        exp = _MAGNITUDE[s[-1].lower()]
-        s = s[:-1].strip()
-    if thousands_sep:
-        s = s.replace(thousands_sep, "")
-    if negative and not s.startswith("-"):
-        s = "-" + s
-    return s, is_pct, exp
-
-
-def to_int(value, column: str, *, thousands_sep=None, currency=False,
-           accounting_negative=False) -> int | None:
-    if value is None:
-        return None
-    s, _, _ = _clean_numeric_string(str(value), column, thousands_sep=thousands_sep,
-                                    currency=currency, accounting_negative=accounting_negative,
-                                    percent=False)
-    try:
-        return int(s)
-    except ValueError:
-        raise RowError("TYP-01", column, value, "not parseable as integer")
-
-
-def to_decimal(value, column: str, *, thousands_sep=None, currency=False,
-               accounting_negative=False, percent=False, magnitude=False,
-               scale=None) -> Decimal | None:
-    if value is None:
-        return None
-    s, is_pct, exp = _clean_numeric_string(str(value), column, thousands_sep=thousands_sep,
-                                           currency=currency, accounting_negative=accounting_negative,
-                                           percent=percent, magnitude=magnitude)
-    try:
-        d = Decimal(s)
-    except InvalidOperation:
-        raise RowError("TYP-01", column, value, "not parseable as decimal")
-    if exp:  # TYP-12: apply confirmed magnitude suffix
-        d = d.scaleb(exp)
-    if is_pct:
-        d = d / Decimal(100)
-    if scale is not None:
-        quantized = d.quantize(Decimal(1).scaleb(-scale), rounding=ROUND_HALF_UP)
-        # TYP-08: silent rounding is forbidden — a value with MORE precision than
-        # the target scale is a row-error unless the spec added an explicit rounding transform.
-        if quantized != d:
-            raise RowError("TYP-08", column, value,
-                           f"exceeds declared scale {scale} (rounding must be an explicit transform)")
-        d = quantized
-    return d
-
-
-def to_date(value, column: str, *, formats) -> str | None:
-    """TYP-03: parse with the spec's ordered format list; render ISO (TYP-05)."""
-    if value is None:
-        return None
-    s = str(value)
-    for fmt in formats:
-        try:
-            return datetime.strptime(s, fmt).date().isoformat()
-        except ValueError:
-            continue
-    raise RowError("TYP-03", column, value,
-                   f"does not match declared format(s) {formats}")
-
-
-def to_datetime(value, column: str, *, formats, assume_tz=None, to_utc=True) -> str | None:
-    """TYP-04: naive values require assume_tz (a fixed-offset like '+05:30' or 'UTC')."""
-    if value is None:
-        return None
-    s = str(value)
-    parsed = None
-    for fmt in formats:
-        try:
-            parsed = datetime.strptime(s, fmt)
-            break
-        except ValueError:
-            continue
-    if parsed is None:
-        raise RowError("TYP-03", column, value,
-                       f"does not match declared format(s) {formats}")
-    if parsed.tzinfo is None:
-        if assume_tz is None:
-            raise RowError("TYP-04", column, value,
-                           "naive datetime with no declared source timezone")
-        parsed = parsed.replace(tzinfo=_parse_tz(assume_tz))
-    if to_utc:
-        parsed = parsed.astimezone(timezone.utc)
-    return parsed.strftime(ISO8601_DATETIME)
-
-
-def _parse_tz(tz: str):
-    if tz.upper() == "UTC":
-        return timezone.utc
-    m = re.match(r"^([+-])(\d{2}):?(\d{2})$", tz)
-    if not m:
-        raise RunError("TYP-04", f"unsupported timezone declaration {tz!r} "
-                                 "(use 'UTC' or a fixed offset like '+05:30')")
-    sign = 1 if m.group(1) == "+" else -1
-    from datetime import timedelta
-    return timezone(sign * timedelta(hours=int(m.group(2)), minutes=int(m.group(3))))
-
-
-def to_bool(value, column: str, *, mapping, report: RunReport | None = None) -> bool | None:
-    """TYP-06: only the confirmed vocabulary converts; anything else is a row-error."""
-    if value is None:
-        return None
-    key = str(value)
-    if key in mapping:
-        return mapping[key]
-    # Case-insensitive second chance — an auto-fix, counted per ERR-04 (TYP-10).
-    for k, mapped in mapping.items():
-        if key.casefold() == str(k).casefold():
-            if report:
-                report.warn(column, "TYP-10")
-            return mapped
-    raise RowError("TYP-06", column, value,
-                   f"not in confirmed boolean vocabulary {sorted(map(str, mapping))}")
-
-
-# ENC-06 mojibake signatures: characters that only appear when UTF-8 bytes were
-# mis-decoded as Latin-1/CP1252 (Ã, Â, the â€ family, Cyrillic-range Ð/Ñ).
-_MOJIBAKE_SIGNATURES = ("Ã", "Â", "â€", "Ð", "Ñ")
-
-
-def repair_mojibake(value, column: str, report: RunReport | None = None):
-    """ENC-06: repair double-encoded UTF-8 baked into data (`JosÃ©` -> `José`).
-
-    Heuristic and OPT-IN — the taxonomy default is pass-through-and-flag; a spec
-    enables this only as a confirmed (or unattended-`unconfirmed`) decision.
-    Safety guarantees so that applying it can never corrupt good data:
-      * only strings carrying a mojibake signature are touched;
-      * repair is the strict Latin-1 -> UTF-8 round-trip (no lossy error modes);
-      * on ANY failure, or if the round-trip yields U+FFFD, the ORIGINAL value
-        is returned unchanged. Repair must never lose data.
-    Counts one ENC-06 warning per repaired value (ERR-04).
-    Upstreamed from an eval-iteration-3 agent run (additive; behavior preserved).
-    """
-    if value is None or not isinstance(value, str):
-        return value
-    if not any(sig in value for sig in _MOJIBAKE_SIGNATURES):
-        return value
-    try:
-        repaired = value.encode("latin-1").decode("utf-8")
-    except (UnicodeEncodeError, UnicodeDecodeError):
-        return value  # not a clean Latin-1 -> UTF-8 round-trip; leave untouched
-    if repaired == value or "�" in repaired:
-        return value
-    if report is not None:  # ERR-04: auto-fixes are counted
-        report.warn(column, "ENC-06")
-    return repaired
-
-
-def skip_if(value, condition, code: str = "STR-06", reason: str = ""):
-    """STR-06 helper: exclude the current row when `condition` is true, else
-    return `value` untouched. Usable both as a statement (value=None) in
-    compiler-emitted skip guards and inside a spec `expr` transform (where a
-    `raise` cannot appear in the expression body). The SkipRow handler counts
-    the exclusion as a warning under `code` — never silent."""
-    if condition:
-        raise SkipRow(code, reason)
-    return value
-
-
-def concat(values, column: str, *, sep: str = "") -> str | None:
-    """Join multiple source values. NUL-05 policy: SQL semantics — any null
-    operand yields null (overrides are per-mapping, visible in the spec)."""
-    if any(v is None for v in values):
-        return None
-    return sep.join(str(v) for v in values)
-
-
-def check_length(value, column: str, *, max_length) -> str | None:
-    if value is None:
-        return None
-    s = str(value)
-    if len(s) > max_length:  # TYP-11: never silently truncate
-        raise RowError("TYP-11", column, value,
-                       f"length {len(s)} exceeds declared max {max_length}")
-    return s
-
-
-def check_range(value, column: str, *, min=None, max=None):
-    if value is None:
-        return None
-    if min is not None and value < min:
-        raise RowError("TYP-09", column, value, f"below declared minimum {min}")
-    if max is not None and value > max:
-        raise RowError("TYP-09", column, value, f"above declared maximum {max}")
-    return value
-
-
-def not_null(value, column: str):
-    if value is None:  # NUL-04
-        raise RowError("NUL-04", column, value, "null arrived at non-nullable target")
-    return value
-
-
-def format_datetime(value, column: str, *, fmt=ISO8601_DATE):
-    """TYP-05: one canonical rendering, declared in the spec."""
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value  # already rendered by to_date/to_datetime
-    return value.strftime(fmt)
 
 
 # ---------------------------------------------------------------------------
@@ -477,8 +147,10 @@ def read_text_with_policy(path: str, encoding: str, report: RunReport) -> str:
 DISPOSITIONS = ("quarantine", "fail-fast", "annotate")  # ERR-01 decision space
 
 
-def run_pipeline(*, input_path: str, out_dir: str, config: dict, transform_row=None,
-                 field_transforms=None, row_guards=None) -> RunResult:
+def run_pipeline(*, input_path: str, out_dir: str, config: PipelineConfig,
+                 transform_row: TransformRowFn | None = None,
+                 field_transforms: Sequence[FieldTransform] | None = None,
+                 row_guards: RowGuardsFn | None = None) -> RunResult:
     """ERR-01 dispositions: `quarantine` (default) and `fail-fast` use
     `transform_row` (built from `field_transforms` if absent). `annotate`
     REQUIRES `field_transforms` — per-field granularity is what lets one bad
@@ -486,7 +158,7 @@ def run_pipeline(*, input_path: str, out_dir: str, config: dict, transform_row=N
     report = RunReport()
     os.makedirs(out_dir, exist_ok=True)
 
-    def abort(code, message):
+    def abort(code: str, message: str) -> RunResult:
         # The single terminate-and-report contract: record the run error, write
         # all reports (which also removes any stale output.csv), return exit 1.
         report.run_error = {"code": code, "message": message}
@@ -504,10 +176,14 @@ def run_pipeline(*, input_path: str, out_dir: str, config: dict, transform_row=N
         return abort("ERR-05", f"unexpected {type(e).__name__}: {e}")
 
 
-def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
-                  field_transforms, row_guards, report: RunReport, abort) -> RunResult:
-    pol = config.get("policies", {})
-    sentinels_by_col = {c: tuple(v) for c, v in pol.get("sentinels", {}).items()}
+def _run_pipeline(input_path: str, out_dir: str, config: PipelineConfig,
+                  transform_row: TransformRowFn | None,
+                  field_transforms: Sequence[FieldTransform] | None,
+                  row_guards: RowGuardsFn | None,
+                  report: RunReport,
+                  abort: Callable[[str, str], RunResult]) -> RunResult:
+    pol = config.get("policies") or PoliciesDict()
+    sentinels_by_col = {c: tuple(v) for c, v in (pol.get("sentinels") or {}).items()}
     disposition = pol.get("error_disposition", "quarantine")  # ERR-01
     if disposition not in DISPOSITIONS:
         # Never silently fall back — an unknown disposition means the spec and
@@ -518,21 +194,27 @@ def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
         raise RunError("ERR-01", "annotate disposition requires field_transforms "
                                  "(per-field granularity); regenerate the pipeline "
                                  "with compiler >= 0.3.0")
-    if transform_row is None:
+    run_transform = transform_row
+    if run_transform is None:
         if not field_transforms:
             raise RunError("ERR-01", "run_pipeline needs transform_row or field_transforms")
+        fts = list(field_transforms)
+        guards = row_guards
 
-        def transform_row(row, rep, _fts=field_transforms, _rg=row_guards):
-            if _rg:
-                _rg(row, rep)
-            return {t: fn(row, rep) for t, fn in _fts}
-    budget = pol.get("error_budget", {"percent": 5, "min_rows": 100})  # ERR-02
+        def _built(row: CleanRow, rep: RunReport) -> Mapping[str, CellValue]:
+            if guards:
+                guards(row, rep)
+            return {t: fn(row, rep) for t, fn in fts}
+
+        run_transform = _built
+    budget = pol.get("error_budget") or ErrorBudgetDict(percent=5, min_rows=100)  # ERR-02
 
     text = read_text_with_policy(input_path, config.get("encoding", "utf-8"), report)
     # newline="" lets csv own row-termination: it accepts \n, \r\n and lone \r
     # (old-Mac) alike AND preserves CRLF inside quoted fields (STR-07 is counted,
     # never rewritten).
-    reader = csv.reader(io.StringIO(text, newline=""), delimiter=config.get("delimiter", ","),
+    reader = csv.reader(io.StringIO(text, newline=""),
+                        delimiter=config.get("delimiter", ","),
                         quotechar=config.get("quotechar", '"'))
     rows = list(reader)
     if not rows:
@@ -552,12 +234,12 @@ def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
     col_index = {c: header.index(c) for c in expected}
 
     out_columns = config["output_columns"]
-    out_rows = []
+    out_rows: list[list[str]] = []
     data_rows = rows[1:]
     report.rows_in = len(data_rows)
 
     duplicate_policy = pol.get("duplicate_rows", "keep")  # STR-05: keep | drop_exact
-    seen_rows: dict = {}
+    seen_rows: dict[tuple[str, ...], int] = {}
 
     for i, raw in enumerate(data_rows, start=2):  # row numbers are 1-based incl. header
         if not any(f.strip() for f in raw):
@@ -575,7 +257,7 @@ def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
             if len(raw) != len(header):  # STR-02
                 raise RowError("STR-02", "<row>", None,
                                f"expected {len(header)} fields, got {len(raw)}")
-            row = {}
+            row: CleanRow = {}
             for cname, idx in col_index.items():
                 v = clean_text(raw[idx], cname, report,
                                normalization=pol.get("unicode_normalization", "NFC"),
@@ -585,13 +267,15 @@ def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
                                           trim=pol.get("trim_whitespace", True),
                                           empty_is_null=pol.get("empty_string_is_null", True),
                                           sentinels=sentinels_by_col.get(cname, ()))
+            out: Mapping[str, CellValue]
             if disposition == "annotate":
+                assert field_transforms is not None  # validated above
                 out, changes = _transform_annotating(row, report, field_transforms,
                                                      row_guards)
                 if changes:
                     report.annotate_row(i, changes)
             else:
-                out = transform_row(row, report)
+                out = run_transform(row, report)
             out_rows.append([_render(out.get(c)) for c in out_columns])
         except SkipRow as skip:
             report.warn("<row>", skip.code)
@@ -623,14 +307,18 @@ def _run_pipeline(input_path: str, out_dir: str, config: dict, transform_row,
                      report, out_dir)
 
 
-def _transform_annotating(row: dict, report: RunReport, field_transforms, row_guards):
+def _transform_annotating(row: CleanRow, report: RunReport,
+                          field_transforms: Sequence[FieldTransform],
+                          row_guards: RowGuardsFn | None
+                          ) -> tuple[dict[str, CellValue], list[ChangeRecord]]:
     """ERR-01 option (c): per-field transform. A content RowError NULLs that
     field and ledgers {field, change: NULLED, reason: <taxonomy id>}; the row
     loads. NUL-04 (declared non-nullable) re-raises — a NOT NULL target cannot
     be repaired by nulling, so the whole row quarantines."""
     if row_guards:
         row_guards(row, report)  # SkipRow propagates to the driver
-    out, changes = {}, []
+    out: dict[str, CellValue] = {}
+    changes: list[ChangeRecord] = []
     for target, fn in field_transforms:
         try:
             out[target] = fn(row, report)
@@ -642,7 +330,7 @@ def _transform_annotating(row: dict, report: RunReport, field_transforms, row_gu
     return out, changes
 
 
-def _render(v):
+def _render(v: CellValue) -> str:
     if v is None:
         return ""
     if isinstance(v, bool):
@@ -652,7 +340,8 @@ def _render(v):
     return str(v)
 
 
-def _atomic_write_csv(path: str, header: list, rows: list):
+def _atomic_write_csv(path: str, header: Sequence[str],
+                      rows: Sequence[Sequence[str]]) -> None:
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
@@ -668,7 +357,8 @@ def _atomic_write_csv(path: str, header: list, rows: list):
         raise
 
 
-def _write_reports(out_dir: str, report: RunReport, config: dict, input_path: str):
+def _write_reports(out_dir: str, report: RunReport, config: PipelineConfig,
+                   input_path: str) -> None:
     """ERR-03: all three granularities, always. ERR-06: manifest, always."""
     if report.run_error:
         # A failed run must not leave a previous run's output.csv sitting next to
@@ -698,7 +388,7 @@ def _write_reports(out_dir: str, report: RunReport, config: dict, input_path: st
     # ERR-06: spec provenance — hash of the resolved config the pipeline embeds.
     spec_sha = hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":"),
                                          default=str).encode("utf-8")).hexdigest()
-    manifest = {
+    manifest: dict[str, object] = {
         "pipeline": config.get("name"),
         "runtime_version": RUNTIME_VERSION,
         "taxonomy_version": TAXONOMY_VERSION,

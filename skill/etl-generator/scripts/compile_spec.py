@@ -29,6 +29,13 @@ import hashlib
 import os
 import re
 import sys
+from typing import TYPE_CHECKING, NoReturn, cast
+
+if TYPE_CHECKING:
+    # The emitted CONFIG must satisfy the runtime's contract. Resolved by mypy
+    # via mypy_path (assets/); never imported at runtime — the compiler stays
+    # runnable standalone.
+    from etl_runtime import PipelineConfig, PoliciesDict
 
 COMPILER_VERSION = "0.3.0"
 
@@ -46,7 +53,7 @@ _FLOAT_RE = re.compile(r"^-?\d+\.\d+$")
 _FLOW_STOP = set(",}]:")
 
 
-def _fail(lineno, msg):
+def _fail(lineno: int, msg: str) -> NoReturn:
     raise SpecError(f"line {lineno}: {msg}")
 
 
@@ -278,7 +285,7 @@ def _flow_key(s, lineno):
 
 
 def _flow_map(s, lineno):
-    out = {}
+    out: dict[object, object] = {}
     s = s.lstrip()
     if s.startswith("}"):
         return out, s[1:]
@@ -298,7 +305,7 @@ def _flow_map(s, lineno):
 
 
 def _flow_seq(s, lineno):
-    out = []
+    out: list[object] = []
     s = s.lstrip()
     if s.startswith("]"):
         return out, s[1:]
@@ -685,7 +692,9 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
     dialect = src.get("dialect") or {}
     pol = spec["policies"]
 
-    policies = {k: pol[k]["value"] for k in REQUIRED_POLICIES}
+    # Values come from the (dynamically-typed) spec loader; validate_spec has
+    # already enforced the shape, so this cast marks the checked boundary.
+    policies = cast("PoliciesDict", {k: pol[k]["value"] for k in REQUIRED_POLICIES})
     sentinels = {}
     for m in spec["mappings"]:
         sent = m.get("sentinels")
@@ -694,7 +703,7 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
     if sentinels:
         policies["sentinels"] = sentinels
 
-    config = {
+    config: "PipelineConfig" = {
         "name": name,
         "spec_version": str(spec["etlspec"]),
         "generator_version": f"etl-spec-compiler/{COMPILER_VERSION}",
@@ -753,7 +762,7 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
     for k, v in config.items():
         if k == "policies":
             config_lines.append("    \"policies\": {")
-            for pk, pv in v.items():
+            for pk, pv in config["policies"].items():
                 config_lines.append(f"        {pk!r}: {pv!r},")
             config_lines.append("    },")
         else:

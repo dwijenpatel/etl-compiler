@@ -6,7 +6,7 @@ How an approved .etlspec.yaml becomes a pipeline. The contract: **the pipeline i
 
 ## Files produced
 
-1. `etl_runtime.py` — copied verbatim from this skill's `assets/`. Never edited per-project, never inlined.
+1. `etl_runtime.py` + `etl_coercers.py` — copied verbatim from this skill's `assets/` (the runtime is two files: deterministic core + I/O driver; pipelines import only `etl_runtime`). Never edited per-project, never inlined.
 2. `<name>_pipeline.py` — generated. Structure below.
 
 ## Pipeline structure

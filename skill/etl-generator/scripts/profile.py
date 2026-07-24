@@ -263,8 +263,8 @@ def profile_structure(rows: list, findings: list):
 # ---------------------------------------------------------------------- per-column
 
 def profile_characters(name: str, values: list, findings: list):
-    counts = Counter()
-    moji_examples = []
+    counts: Counter[str] = Counter()
+    moji_examples: list[str] = []
     for v in values:
         if not v:
             continue
@@ -341,7 +341,7 @@ def profile_types(name: str, values: list, findings: list):
         return
 
     # TYP-01 formatted numerics
-    fmt_counts = Counter()
+    fmt_counts: Counter[str] = Counter()
     for v in vals:
         if THOUSANDS_RE.match(v):
             fmt_counts["thousands-separators"] += 1
@@ -428,7 +428,7 @@ def profile_types(name: str, values: list, findings: list):
     # TYP-10 case/trim collisions in low-cardinality columns
     distinct = set(vals)
     if 1 < len(distinct) <= 20 and not all(PLAIN_NUMBER_RE.match(v) for v in distinct):
-        groups = {}
+        groups: dict[str, set[str]] = {}
         for v in distinct:
             groups.setdefault(v.strip().casefold(), set()).add(v)
         collisions = {k: sorted(g) for k, g in groups.items() if len(g) > 1}

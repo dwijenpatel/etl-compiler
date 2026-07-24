@@ -17,3 +17,6 @@ evals/iteration-2/
 # iteration-3 E3 re-execution scratch (reproducible from e1-regen artifacts + variant CSVs)
 evals/iteration-3/e3-variants/with_skill/
 evals/iteration-3/e3-variants/without_skill/
+
+# dev virtualenv (uv)
+.venv/

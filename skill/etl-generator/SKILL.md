@@ -4,7 +4,7 @@ description: Interactive ETL code generator built on a failure-mode taxonomy. Us
 compatibility: Requires Python 3 (standard library only — no third-party packages) and the ability to run bundled scripts. Harness-agnostic; conforms to the Agent Skills open standard.
 metadata:
   taxonomy-version: "0.2"
-  runtime-version: "0.4.0"
+  runtime-version: "0.5.0"
 ---
 
 # ETL Generator
@@ -59,7 +59,7 @@ Write `<name>.etlspec.yaml` following `references/spec-format.md` exactly, where
 
 ### Step 6 — Generate the pipeline (compiler-first; do not hand-write code)
 
-1. Copy `assets/etl_runtime.py` into the user's project directory (unmodified — it is the tested, shared implementation of taxonomy semantics; never inline or fork its logic into the pipeline).
+1. Copy `assets/etl_runtime.py` **and** `assets/etl_coercers.py` into the user's project directory (unmodified — together they are the tested, shared implementation of taxonomy semantics; never inline or fork their logic into the pipeline). The runtime is deliberately split on the effect boundary: `etl_coercers` is the deterministic core, `etl_runtime` the I/O driver that re-exports it — pipelines import only `etl_runtime`.
 2. Run the bundled deterministic compiler — **the spec is your output; the pipeline is the compiler's**:
 
 ```bash
@@ -96,4 +96,4 @@ Check: the run completes; the report is written; quarantine counts match expecta
 - `references/spec-format.md` — the .etlspec.yaml schema with a complete example. Read before writing any spec.
 - `references/codegen-guide.md` — pipeline structure, runtime API usage, and codegen conventions. Read before generating code.
 - `scripts/profile.py` — the profiler; run it, don't reimplement it.
-- `assets/etl_runtime.py` — the runtime module; copy into the user's project verbatim.
+- `assets/etl_runtime.py` + `assets/etl_coercers.py` — the two-file runtime; copy both into the user's project verbatim.

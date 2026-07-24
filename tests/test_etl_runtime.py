@@ -20,6 +20,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..",
 import etl_runtime as rt
 
 
+def _run_error(report: "rt.RunReport") -> "rt.RunErrorInfo":
+    """Assert-and-narrow: tests read run_error only where a failure is expected."""
+    assert report.run_error is not None
+    return report.run_error
+
+
 class TestCleanText(unittest.TestCase):
     def test_enc03_nfc_normalization_applied_and_counted(self):
         report = rt.RunReport()
@@ -366,7 +372,7 @@ class TestRunPipeline(unittest.TestCase):
         res = rt.run_pipeline(input_path=path, out_dir=self.out_dir, config=cfg,
                               transform_row=_passthrough_transform(["id", "name"]))
         self.assertEqual(res.exit_code, 1)
-        self.assertEqual(res.report.run_error["code"], "STR-02")
+        self.assertEqual(_run_error(res.report)["code"], "STR-02")
         self.assertFalse(os.path.exists(os.path.join(self.out_dir, "output.csv")))
 
     def test_err02_error_budget_converts_run_to_failure(self):
@@ -376,7 +382,7 @@ class TestRunPipeline(unittest.TestCase):
         res = rt.run_pipeline(input_path=path, out_dir=self.out_dir, config=cfg,
                               transform_row=_passthrough_transform(["id", "name"]))
         self.assertEqual(res.exit_code, 1)
-        self.assertEqual(res.report.run_error["code"], "ERR-02")
+        self.assertEqual(_run_error(res.report)["code"], "ERR-02")
         self.assertFalse(os.path.exists(os.path.join(self.out_dir, "output.csv")))
 
     # ------------------------------------------------------------------
@@ -464,7 +470,7 @@ class TestRunPipeline(unittest.TestCase):
         res = rt.run_pipeline(input_path=path, out_dir=self.out_dir, config=cfg,
                               transform_row=_passthrough_transform(["id", "name"]))
         self.assertEqual(res.exit_code, 1)
-        self.assertEqual(res.report.run_error["code"], "ERR-01")
+        self.assertEqual(_run_error(res.report)["code"], "ERR-01")
 
     def test_unknown_disposition_fails_loud_never_silently_falls_back(self):
         path = self._input("id,name\n1,a\n")
@@ -472,7 +478,7 @@ class TestRunPipeline(unittest.TestCase):
         res = rt.run_pipeline(input_path=path, out_dir=self.out_dir, config=cfg,
                               transform_row=_passthrough_transform(["id", "name"]))
         self.assertEqual(res.exit_code, 1)
-        self.assertEqual(res.report.run_error["code"], "ERR-01")
+        self.assertEqual(_run_error(res.report)["code"], "ERR-01")
 
     # ------------------------------------------------------------------
     # ERR-03(i): per-row error records adopt DuckDB reject_errors fields
@@ -504,8 +510,8 @@ class TestRunPipeline(unittest.TestCase):
         res = rt.run_pipeline(input_path=path, out_dir=self.out_dir,
                               config=self._config(), transform_row=bad_transform)
         self.assertEqual(res.exit_code, 1)
-        self.assertEqual(res.report.run_error["code"], "ERR-05")
-        self.assertIn("ValueError", res.report.run_error["message"])
+        self.assertEqual(_run_error(res.report)["code"], "ERR-05")
+        self.assertIn("ValueError", _run_error(res.report)["message"])
         self.assertTrue(os.path.exists(os.path.join(self.out_dir, "summary.json")))
 
     def test_err02_small_file_total_failure_is_run_error_not_success(self):
@@ -516,7 +522,7 @@ class TestRunPipeline(unittest.TestCase):
         res = rt.run_pipeline(input_path=path, out_dir=self.out_dir, config=cfg,
                               transform_row=_passthrough_transform(["id", "name"]))
         self.assertEqual(res.exit_code, 1)
-        self.assertEqual(res.report.run_error["code"], "ERR-02")
+        self.assertEqual(_run_error(res.report)["code"], "ERR-02")
         self.assertFalse(os.path.exists(os.path.join(self.out_dir, "output.csv")))
 
     def test_failed_rerun_removes_stale_output(self):
@@ -539,8 +545,8 @@ class TestRunPipeline(unittest.TestCase):
                               config=self._config(),
                               transform_row=_passthrough_transform(["id", "name"]))
         self.assertEqual(res.exit_code, 1)
-        self.assertEqual(res.report.run_error["code"], "STR-04")
-        self.assertIn("id", res.report.run_error["message"])
+        self.assertEqual(_run_error(res.report)["code"], "STR-04")
+        self.assertIn("id", _run_error(res.report)["message"])
 
     def test_quoted_crlf_inside_field_is_preserved(self):
         # STR-07 counting must not rewrite CRLF that lives INSIDE a quoted field.
@@ -582,9 +588,10 @@ class TestRunPipeline(unittest.TestCase):
                               config=self._config(),
                               transform_row=_passthrough_transform(["id", "name"]))
         self.assertEqual(res.exit_code, 1)
-        self.assertEqual(res.report.run_error["code"], "KEY-02")
+        self.assertEqual(_run_error(res.report)["code"], "KEY-02")
         self.assertFalse(os.path.exists(os.path.join(self.out_dir, "output.csv")))
         manifest = self._read_json("manifest.json")
+        assert manifest["run_error"] is not None
         self.assertEqual(manifest["run_error"]["code"], "KEY-02")
 
     def test_enc01_bad_encoding_returns_exit_1_with_reports_no_output(self):
@@ -595,9 +602,10 @@ class TestRunPipeline(unittest.TestCase):
                               config=self._config(),
                               transform_row=_passthrough_transform(["id", "name"]))
         self.assertEqual(res.exit_code, 1)
-        self.assertEqual(res.report.run_error["code"], "ENC-01")
+        self.assertEqual(_run_error(res.report)["code"], "ENC-01")
         self.assertFalse(os.path.exists(os.path.join(self.out_dir, "output.csv")))
         summary = self._read_json("summary.json")
+        assert summary["run_error"] is not None
         self.assertEqual(summary["run_error"]["code"], "ENC-01")
 
 

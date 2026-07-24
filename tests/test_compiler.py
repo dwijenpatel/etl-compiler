@@ -14,6 +14,7 @@ _SPEC = importlib.util.spec_from_file_location(
     "compile_spec",
     os.path.join(os.path.dirname(__file__), "..",
                  "skill", "etl-generator", "scripts", "compile_spec.py"))
+assert _SPEC is not None and _SPEC.loader is not None
 cs = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(cs)
 
@@ -174,8 +175,9 @@ class TestCompilerEndToEnd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "vendor_orders_pipeline.py"), "w") as f:
                 f.write(_compile_vendor())
-            shutil.copy(os.path.join(REPO, "skill", "etl-generator", "assets",
-                                     "etl_runtime.py"), tmp)
+            for rt_file in ("etl_runtime.py", "etl_coercers.py"):  # two-file runtime
+                shutil.copy(os.path.join(REPO, "skill", "etl-generator", "assets",
+                                         rt_file), tmp)
             sample = os.path.join(REPO, "evals", "inputs", "vendor_orders_sample.csv")
             proc = subprocess.run(
                 ["python3", "vendor_orders_pipeline.py", sample, "--out-dir", "out"],
@@ -262,8 +264,9 @@ class TestCompilerNewOps(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         with open(os.path.join(tmp, "mini_pipeline.py"), "w") as f:
             f.write(_compile_mini())
-        shutil.copy(os.path.join(REPO, "skill", "etl-generator", "assets",
-                                 "etl_runtime.py"), tmp)
+        for rt_file in ("etl_runtime.py", "etl_coercers.py"):  # two-file runtime
+            shutil.copy(os.path.join(REPO, "skill", "etl-generator", "assets",
+                                     rt_file), tmp)
         with open(os.path.join(tmp, "in.csv"), "w", encoding="utf-8", newline="") as f:
             f.write(csv_text)
         p = subprocess.run(["python3", "mini_pipeline.py", "in.csv", "--out-dir", "out"],
@@ -346,8 +349,9 @@ class TestAnnotateDisposition(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         with open(os.path.join(tmp, "p.py"), "w") as f:
             f.write(code)
-        shutil.copy(os.path.join(REPO, "skill", "etl-generator", "assets",
-                                 "etl_runtime.py"), tmp)
+        for rt_file in ("etl_runtime.py", "etl_coercers.py"):  # two-file runtime
+            shutil.copy(os.path.join(REPO, "skill", "etl-generator", "assets",
+                                     rt_file), tmp)
         with open(os.path.join(tmp, "in.csv"), "w", newline="") as f:
             f.write("id,name,note\n1,a,7\n2,b,seven\n")
         p = subprocess.run(["python3", "p.py", "in.csv", "--out-dir", "out"],
@@ -381,8 +385,9 @@ class TestFullMessySpecEndToEnd(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         with open(os.path.join(tmp, "orders_pipeline.py"), "w") as f:
             f.write(code)
-        shutil.copy(os.path.join(REPO, "skill", "etl-generator", "assets",
-                                 "etl_runtime.py"), tmp)
+        for rt_file in ("etl_runtime.py", "etl_coercers.py"):  # two-file runtime
+            shutil.copy(os.path.join(REPO, "skill", "etl-generator", "assets",
+                                     rt_file), tmp)
         p = subprocess.run(
             ["python3", "orders_pipeline.py",
              os.path.join(REPO, "evals", "inputs", "orders_export.csv"),
