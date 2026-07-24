@@ -14,9 +14,11 @@ corpus/
 examples/
 evals/iteration-1/
 evals/iteration-2/
-# iteration-3 E3 re-execution scratch (reproducible from e1-regen artifacts + variant CSVs)
-evals/iteration-3/e3-variants/with_skill/
-evals/iteration-3/e3-variants/without_skill/
+evals/iteration-3/
+# iteration-4 re-execution scratch (reproducible from the tracked specs/pipelines/variants)
+evals/iteration-4/e3-variants/with_skill/
+evals/iteration-4/e4-edit/out_*/
+evals/iteration-4/e1-regen/*/run-*/input.csv
 
 # dev virtualenv (uv)
 .venv/

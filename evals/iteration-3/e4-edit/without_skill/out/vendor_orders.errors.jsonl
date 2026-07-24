@@ -1,2 +1,0 @@
-{"row": 2, "raw": ["20000001", "Alice Wong", "$2,450.00", "01/15/2026", "Y", "02134"], "errors": [{"column": "order_date", "code": "TYP-03", "message": "cannot parse date from '01/15/2026' using formats ['%d/%m/%Y']"}]}
-{"row": 3, "raw": ["20000002", "Ben Ortiz", "(75)", "02/20/2026", "N", "90210"], "errors": [{"column": "order_date", "code": "TYP-03", "message": "cannot parse date from '02/20/2026' using formats ['%d/%m/%Y']"}]}

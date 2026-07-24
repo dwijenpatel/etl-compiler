@@ -1,0 +1,104 @@
+etlspec: 0.4                       # spec format version
+name: orders_export                # pipeline name (snake_case, from input stem)
+taxonomy_version: 0.4              # taxonomy this spec was authored against
+
+# Provenance note (unattended run): the user was away, so ask-class findings were
+# resolved from the provided target sample (target_orders.csv) where it supplies
+# evidence, and from house defaults otherwise. Decisions that were NOT settled by the
+# target sample are marked `unconfirmed` and listed in review_required below.
+
+source:
+  format: csv
+  encoding: {value: utf-8, provenance: detected-confirmed}   # ENC-01: profiler decoded clean UTF-8 (BOM present -> ENC-02 strip)
+  dialect:
+    delimiter: ","                 # STR-01
+    quotechar: '"'
+  header: present                  # STR-04: header row present (names carry stray spaces -> trimmed)
+  expected_columns: [order_id, customer, amt, order_date, active, zip, notes]  # KEY-02/03 validation list (post-trim names)
+
+target:
+  columns:                         # ordered; drives output column order (matches target_orders.csv)
+    - {name: order_id, type: string, nullable: false}
+    - {name: customer_name, type: string, nullable: false}
+    - {name: amount, type: decimal, scale: 2, nullable: true}
+    - {name: order_date, type: date, nullable: true}
+    - {name: is_active, type: boolean, nullable: true}
+    - {name: postal_code, type: string, nullable: true, max_length: 10}
+    - {name: notes, type: string, nullable: true}
+
+policies:                          # dataset-level; taxonomy IDs in comments
+  unicode_normalization: {value: NFC, provenance: default}          # ENC-03
+  strip_control_chars: {value: true, provenance: default}           # ENC-04
+  normalize_unicode_whitespace: {value: true, provenance: default}  # ENC-05
+  trim_whitespace: {value: true, provenance: default}               # NUL-02
+  empty_string_is_null: {value: true, provenance: unconfirmed}      # NUL-01: string cols -> ask; target doesn't distinguish null vs "" (both render empty in CSV). LOW RISK. See review_required.
+  null_propagation: {value: sql, provenance: default}               # NUL-05
+  datetime_rendering: {value: iso8601, provenance: default}         # TYP-05
+  error_disposition: {value: quarantine, provenance: default}       # ERR-01
+  error_budget: {value: {percent: 5, min_rows: 100}, provenance: default}  # ERR-02
+  duplicate_rows: {value: keep, provenance: unconfirmed}            # STR-05: input has 1 exact dup; house default keeps (no data loss). Target sample has no dup to confirm. See review_required.
+  formula_injection: {value: pass-through, provenance: default}     # ENC-08: output is data for a warehouse; no formula-leading cells produced (amount -500.00 is a plain signed numeric, never at risk)
+
+skip_rows:                         # STR-06: confirmed non-data rows, matched on the RAW value
+  - {column: order_id, pattern: '^\D', id: STR-06, reason: "footer/total row (e.g. 'Total,,3222.56')", provenance: detected-confirmed}
+
+mappings:                          # one entry per target column
+  - target: order_id
+    source: order_id
+    transforms: []                 # keep as string (uniform-width high-cardinality id); not-null enforced by target
+    decisions:
+      - {id: TYP-07, choice: string, provenance: detected-confirmed,
+         evidence: "uniform 8-digit ids; target keeps them as strings"}
+
+  - target: customer_name
+    source: customer
+    transforms:
+      - {op: repair_mojibake}      # ENC-06: opt-in, signature-gated, report-counted (NFC/control/ws cleanup applied by policy first)
+    decisions:
+      - {id: ENC-06, choice: "repair mojibake", provenance: detected-confirmed,
+         evidence: "source 'JosÃ© GarcÃ­a' -> target 'José García'"}
+
+  - target: amount
+    source: amt
+    transforms:
+      - {op: to_decimal, thousands_sep: ",", currency: true, accounting_negative: true}  # scale 2 driven by target column (TYP-08)
+    decisions:
+      - {id: TYP-01, choice: "strip $ and thousands commas; (n) = negative", provenance: detected-confirmed,
+         evidence: "target: $1,234.56 -> 1234.56 ; (500) -> -500.00"}
+
+  - target: order_date
+    source: order_date
+    transforms:
+      - {op: to_date, formats: ["%m/%d/%Y"]}   # MDY
+    decisions:
+      - {id: TYP-03, choice: MDY, provenance: unconfirmed,
+         evidence: "target: 01/02/2026 -> 2026-01-02 and 03/04/2026 -> 2026-03-04 require MDY; UNCONFIRMED because every sample date has day<=12 (individually MDY/DMY-ambiguous). See review_required."}
+
+  - target: is_active
+    source: active
+    transforms:
+      - {op: to_bool, mapping: {Y: true, N: false}}
+    decisions:
+      - {id: TYP-06, choice: "Y=true, N=false", provenance: detected-confirmed,
+         evidence: "target: Y -> true, N -> false"}
+
+  - target: postal_code
+    source: zip
+    transforms: []                 # keep as string; max_length enforced
+    decisions:
+      - {id: TYP-07, choice: string, provenance: detected-confirmed,
+         evidence: "leading zeros (02134); target keeps as string"}
+
+  - target: notes
+    source: notes
+    transforms: []
+    sentinels: {values: ["N/A"], provenance: detected-confirmed}   # NUL-03: target row 'N/A' -> empty (null)
+    decisions:
+      - {id: NUL-03, choice: "'N/A' means null", provenance: detected-confirmed,
+         evidence: "target: notes 'N/A' -> empty"}
+
+unmapped:
+  unused_source_columns: []        # all 7 source columns are mapped
+  unfilled_target_columns: []      # all 7 target columns are filled
+
+review_required: [TYP-03, STR-05, NUL-01]   # unconfirmed decisions made unattended — see notes above

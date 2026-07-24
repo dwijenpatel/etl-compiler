@@ -1,5 +1,0 @@
-order_id,customer_name,amount,order_date,is_active,postal_code
-20000001,Alice Wong,2450.00,2026-01-15,true,02134
-20000002,Ben Ortiz,-75.00,2026-02-20,false,90210
-20000003,Cora Diaz,310.25,,true,10001
-20000004,Dev Patel,1000.00,2026-03-05,true,60601

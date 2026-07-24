@@ -1,0 +1,97 @@
+{
+  "file": "probe.csv",
+  "encoding": "utf-8",
+  "delimiter": ",",
+  "columns": [
+    "vendor",
+    "ver",
+    "when",
+    "note",
+    "amt"
+  ],
+  "rows_profiled": 5,
+  "findings": [
+    {
+      "id": "ENC-08",
+      "class": "ask",
+      "message": "formula-leading value(s) (= @ + -) — a spreadsheet would execute these on open; neutralize in output? (default: pass through)",
+      "column": "note",
+      "count": 3,
+      "evidence": [
+        "=SUM(A1:A9)",
+        "@june",
+        "=2+2"
+      ],
+      "group_key": "formula-leading"
+    },
+    {
+      "id": "TYP-03",
+      "class": "ask",
+      "message": "dates consistent with DMY (2 decisive, 3 ambiguous) — confirm",
+      "column": "when",
+      "evidence": {
+        "decisive_dmy": 2,
+        "ambiguous": 3
+      }
+    },
+    {
+      "id": "TYP-04",
+      "class": "ask",
+      "message": "5 naive datetime(s) with no UTC offset — declare the source timezone",
+      "column": "when",
+      "count": 5,
+      "group_key": "naive-datetime"
+    }
+  ],
+  "interview_groups": [
+    {
+      "id": "ENC-08",
+      "class": "ask",
+      "group_key": "formula-leading",
+      "message": "formula-leading value(s) (= @ + -) — a spreadsheet would execute these on open; neutralize in output? (default: pass through)",
+      "columns": [
+        "note"
+      ],
+      "evidence": {
+        "note": [
+          "=SUM(A1:A9)",
+          "@june",
+          "=2+2"
+        ]
+      },
+      "n_columns": 1
+    },
+    {
+      "id": "TYP-03",
+      "class": "ask",
+      "group_key": null,
+      "message": "dates consistent with DMY (2 decisive, 3 ambiguous) — confirm",
+      "columns": [
+        "when"
+      ],
+      "evidence": {
+        "when": {
+          "decisive_dmy": 2,
+          "ambiguous": 3
+        }
+      },
+      "n_columns": 1
+    },
+    {
+      "id": "TYP-04",
+      "class": "ask",
+      "group_key": "naive-datetime",
+      "message": "5 naive datetime(s) with no UTC offset — declare the source timezone",
+      "columns": [
+        "when"
+      ],
+      "n_columns": 1
+    }
+  ],
+  "summary": {
+    "ask": 3,
+    "ask_questions": 3,
+    "fix": 0,
+    "row-error": 0
+  }
+}
