@@ -29,13 +29,107 @@ import hashlib
 import os
 import re
 import sys
-from typing import TYPE_CHECKING, NoReturn, cast
+from typing import TYPE_CHECKING, NoReturn, Sequence, TypedDict, cast
 
 if TYPE_CHECKING:
     # The emitted CONFIG must satisfy the runtime's contract. Resolved by mypy
     # via mypy_path (assets/); never imported at runtime — the compiler stays
     # runnable standalone.
     from etl_runtime import PipelineConfig, PoliciesDict
+
+# ---------------------------------------------------------------------------
+# Typed vocabulary.
+#
+# The loader produces plain data in this recursive shape; `load_etlspec` casts
+# its result to `SpecDict` — a *syntactic* claim (these keys, when present,
+# carry these types). The semantic gate remains `validate_spec`, which checks
+# every shape below before any code is emitted; post-validation access relies
+# on the TypedDicts, with `assert isinstance` narrowings only where mypy cannot
+# see a `_require` already proved the fact.
+# ---------------------------------------------------------------------------
+
+YamlScalar = str | int | float | bool | None
+YamlValue = YamlScalar | list["YamlValue"] | dict[YamlScalar, "YamlValue"]
+# One preprocessed source line: (indent, content, lineno).
+Line = tuple[int, str, int]
+
+# Op-dependent bags — keys vary per op/decision; values repr'd into emitted code.
+TransformDict = dict[str, object]
+DecisionDict = dict[str, object]
+
+
+class PolicyEntry(TypedDict, total=False):
+    value: object
+    provenance: str
+
+
+class EncodingDecl(TypedDict, total=False):
+    value: str
+    provenance: str
+
+
+class DialectDict(TypedDict, total=False):
+    delimiter: str
+    quotechar: str
+
+
+class SourceDict(TypedDict, total=False):
+    format: str
+    encoding: EncodingDecl
+    dialect: DialectDict
+    header: str
+    expected_columns: list[str]
+
+
+class ColumnDict(TypedDict, total=False):
+    name: str
+    type: str
+    nullable: bool
+    scale: int
+    max_length: int
+
+
+class TargetDict(TypedDict, total=False):
+    columns: list[ColumnDict]
+
+
+class SentinelsDecl(TypedDict, total=False):
+    values: list[str]
+    provenance: str
+
+
+class MappingDict(TypedDict, total=False):
+    target: str
+    source: str
+    transforms: list[TransformDict]
+    decisions: list[DecisionDict]
+    sentinels: SentinelsDecl
+
+
+class SkipRuleDict(TypedDict, total=False):
+    column: str
+    pattern: str
+    id: str
+    reason: str
+    provenance: str
+
+
+class UnmappedDict(TypedDict, total=False):
+    unused_source_columns: list[str]
+    unfilled_target_columns: list[str]
+
+
+class SpecDict(TypedDict, total=False):
+    etlspec: str | float
+    name: str
+    taxonomy_version: str | float
+    source: SourceDict
+    target: TargetDict
+    policies: dict[str, PolicyEntry]
+    skip_rows: list[SkipRuleDict]
+    mappings: list[MappingDict]
+    unmapped: UnmappedDict
+    review_required: list[object]
 
 COMPILER_VERSION = "0.3.0"
 
@@ -57,7 +151,7 @@ def _fail(lineno: int, msg: str) -> NoReturn:
     raise SpecError(f"line {lineno}: {msg}")
 
 
-def _strip_comment(line, lineno):
+def _strip_comment(line: str, lineno: int) -> str:
     """Remove a trailing comment, respecting quotes. Returns stripped line."""
     out = []
     quote = None
@@ -91,7 +185,7 @@ def _strip_comment(line, lineno):
     return "".join(out).rstrip()
 
 
-def _bracket_delta(s, lineno):
+def _bracket_delta(s: str, lineno: int) -> int:
     """Net {[ vs ]} depth outside quotes."""
     depth = 0
     quote = None
@@ -119,7 +213,7 @@ def _bracket_delta(s, lineno):
     return depth
 
 
-def _preprocess(text):
+def _preprocess(text: str) -> list[Line]:
     """-> list of (indent, content, lineno): comments stripped, blanks dropped,
     flow collections joined across lines until brackets balance."""
     raw = text.split("\n")
@@ -157,7 +251,7 @@ def _preprocess(text):
     return items
 
 
-def _in_quotes_only(content, marker):
+def _in_quotes_only(content: str, marker: str) -> bool:
     """True if every occurrence of marker sits inside a quoted string."""
     quote = None
     i = 0
@@ -182,7 +276,7 @@ def _in_quotes_only(content, marker):
     return True
 
 
-def _scalar(token, lineno):
+def _scalar(token: str, lineno: int) -> YamlScalar:
     token = token.strip()
     if token.startswith('"'):
         if not (len(token) >= 2 and token.endswith('"')):
@@ -224,14 +318,14 @@ def _scalar(token, lineno):
 
 # ---- flow-collection tokenizer/parser -------------------------------
 
-def _parse_flow(s, lineno):
+def _parse_flow(s: str, lineno: int) -> YamlValue:
     val, rest = _flow_value(s.strip(), lineno)
     if rest.strip():
         _fail(lineno, f"trailing content after flow collection: {rest.strip()!r}")
     return val
 
 
-def _flow_value(s, lineno):
+def _flow_value(s: str, lineno: int) -> tuple[YamlValue, str]:
     s = s.lstrip()
     if s.startswith("{"):
         return _flow_map(s[1:], lineno)
@@ -249,7 +343,7 @@ def _flow_value(s, lineno):
     return _scalar(s[:j], lineno), s[j:]
 
 
-def _quoted_end(s, lineno):
+def _quoted_end(s: str, lineno: int) -> int:
     quote = s[0]
     i = 1
     while i < len(s):
@@ -269,7 +363,7 @@ def _quoted_end(s, lineno):
     _fail(lineno, "unterminated quoted string in flow collection")
 
 
-def _flow_key(s, lineno):
+def _flow_key(s: str, lineno: int) -> tuple[YamlScalar, str]:
     s = s.lstrip()
     if s.startswith(('"', "'")):
         end = _quoted_end(s, lineno)
@@ -284,8 +378,8 @@ def _flow_key(s, lineno):
     return key, rest[1:]
 
 
-def _flow_map(s, lineno):
-    out: dict[object, object] = {}
+def _flow_map(s: str, lineno: int) -> tuple[dict[YamlScalar, YamlValue], str]:
+    out: dict[YamlScalar, YamlValue] = {}
     s = s.lstrip()
     if s.startswith("}"):
         return out, s[1:]
@@ -304,8 +398,8 @@ def _flow_map(s, lineno):
         _fail(lineno, f"expected ',' or '}}' in flow map near {s[:20]!r}")
 
 
-def _flow_seq(s, lineno):
-    out: list[object] = []
+def _flow_seq(s: str, lineno: int) -> tuple[list[YamlValue], str]:
+    out: list[YamlValue] = []
     s = s.lstrip()
     if s.startswith("]"):
         return out, s[1:]
@@ -321,7 +415,7 @@ def _flow_seq(s, lineno):
         _fail(lineno, f"expected ',' or ']' in flow sequence near {s[:20]!r}")
 
 
-def _value_of(rest, lineno):
+def _value_of(rest: str, lineno: int) -> YamlValue:
     rest = rest.strip()
     if rest.startswith(("{", "[")):
         return _parse_flow(rest, lineno)
@@ -330,14 +424,14 @@ def _value_of(rest, lineno):
 
 # ---- block structure ------------------------------------------------
 
-def _parse_block(items, i, indent):
+def _parse_block(items: list[Line], i: int, indent: int) -> tuple[YamlValue, int]:
     """Parse a block map or sequence at exactly `indent`. Returns (value, next_i)."""
     if items[i][1].startswith("- ") or items[i][1] == "-":
         return _parse_seq(items, i, indent)
     return _parse_map(items, i, indent)
 
 
-def _parse_map(items, i, indent):
+def _parse_map(items: list[Line], i: int, indent: int) -> tuple[dict[YamlScalar, YamlValue], int]:
     out = {}
     while i < len(items):
         ind, content, lineno = items[i]
@@ -367,7 +461,7 @@ def _parse_map(items, i, indent):
     return out, i
 
 
-def _parse_seq(items, i, indent):
+def _parse_seq(items: list[Line], i: int, indent: int) -> tuple[list[YamlValue], int]:
     out = []
     while i < len(items):
         ind, content, lineno = items[i]
@@ -395,7 +489,7 @@ def _parse_seq(items, i, indent):
     return out, i
 
 
-def load_etlspec(text: str) -> dict:
+def load_etlspec(text: str) -> SpecDict:
     """Parse etlspec-subset YAML text into plain Python data. Fail-loud."""
     items = _preprocess(text)
     if not items:
@@ -407,7 +501,8 @@ def load_etlspec(text: str) -> dict:
         _fail(items[i][2], f"unparsed content: {items[i][1]!r}")
     if not isinstance(val, dict):
         raise SpecError("top level of an etlspec must be a mapping")
-    return val
+    # Syntactic-claim cast; validate_spec is the semantic gate (see module header).
+    return cast(SpecDict, val)
 
 
 # =====================================================================
@@ -447,12 +542,12 @@ SUPPORTED_ETLSPEC = {"0.1", "0.2", "0.3"}   # 0.2: skip_rows + repair_mojibake/c
 DISPOSITIONS = {"quarantine", "fail-fast", "annotate"}  # ERR-01 (runtime >= 0.4.0 for annotate)
 
 
-def _require(cond, msg):
+def _require(cond: object, msg: str) -> None:
     if not cond:
         raise SpecError(msg)
 
 
-def validate_spec(spec: dict):
+def validate_spec(spec: SpecDict) -> dict[str, ColumnDict]:
     for key in ("etlspec", "name", "taxonomy_version", "source", "target",
                 "policies", "mappings"):
         _require(key in spec, f"spec is missing required top-level key {key!r}")
@@ -488,7 +583,8 @@ def validate_spec(spec: dict):
 
     cols = spec["target"].get("columns")
     _require(isinstance(cols, list) and cols, "target.columns must be a non-empty list")
-    col_by_name = {}
+    assert isinstance(cols, list)  # narrowed: _require above proved it
+    col_by_name: dict[str, ColumnDict] = {}
     for c in cols:
         _require(isinstance(c, dict) and "name" in c and "type" in c and "nullable" in c,
                  f"target column {c!r} needs name/type/nullable")
@@ -525,9 +621,11 @@ def validate_spec(spec: dict):
                      f"mapping for {t!r}: source {m['source']!r} not in expected_columns")
         for tr in transforms:
             if tr.get("op") == "concat":
-                _require(isinstance(tr.get("sources"), list) and tr["sources"],
+                srcs = tr.get("sources")
+                _require(isinstance(srcs, list) and srcs,
                          f"concat for {t!r} needs a non-empty sources list")
-                for s in tr["sources"]:
+                assert isinstance(srcs, list)  # narrowed: _require above proved it
+                for s in srcs:
                     _require(s in expected,
                              f"concat for {t!r}: source {s!r} not in expected_columns")
         for tr in transforms:
@@ -535,7 +633,9 @@ def validate_spec(spec: dict):
             _require(op not in UNSUPPORTED_OPS,
                      f"op {op!r} is not yet supported by the compiler — use "
                      "{op: expr, python: ...} (loud escape hatch) instead")
-            _require(op in OPS, f"mapping for {t!r}: unknown transform op {op!r}")
+            _require(isinstance(op, str) and op in OPS,
+                     f"mapping for {t!r}: unknown transform op {op!r}")
+            assert isinstance(op, str)  # narrowed: _require above proved it
             for kwarg in tr:
                 _require(kwarg == "op" or kwarg in OPS[op],
                          f"op {op!r}: unknown argument {kwarg!r}")
@@ -569,7 +669,7 @@ def validate_spec(spec: dict):
 _MAX_LINE = 96
 
 
-def _kwargs_text(tr, op, extra=()):
+def _kwargs_text(tr: TransformDict, op: str, extra: Sequence[str] = ()) -> str:
     parts = []
     for k in OPS[op]:
         if k in tr:
@@ -578,7 +678,7 @@ def _kwargs_text(tr, op, extra=()):
     return ", ".join(parts)
 
 
-def _cmt(s) -> str:
+def _cmt(s: object) -> str:
     """Neutralize any spec-derived string interpolated raw into an emitted comment
     or docstring: newlines/CRs collapse to spaces so nothing can break out of the
     line, and `\"\"\"` is defanged so it can't close a docstring. Code reaches the
@@ -586,7 +686,7 @@ def _cmt(s) -> str:
     return str(s).replace("\r", " ").replace("\n", " ").replace('"""', '”””')
 
 
-def _mapping_comment(m):
+def _mapping_comment(m: MappingDict) -> str:
     bits = []
     for d in m.get("decisions") or []:
         choice = d.get("choice")
@@ -602,13 +702,14 @@ def _mapping_comment(m):
     return _cmt(f"    # {m['target']} <- {src}{tail}")
 
 
-def _emit_mapping(m, col, helpers):
+def _emit_mapping(m: MappingDict, col: ColumnDict, helpers: list[str]) -> list[str]:
     """Returns list of code lines for one mapping."""
     target, src = m["target"], m.get("source")
     transforms = m.get("transforms") or []
     expr = f"row[{src!r}]" if src is not None else None
     for tr in transforms:
         op = tr["op"]
+        assert isinstance(op, str)  # validate_spec proved membership in OPS
         if op == "constant":
             expr = repr(tr["value"])
         elif op == "expr":
@@ -621,7 +722,8 @@ def _emit_mapping(m, col, helpers):
                 f"    return {tr['python']}\n")
             expr = f"{fn}(row, report)"
         elif op == "concat":
-            srcs = ", ".join(f"row[{s!r}]" for s in tr["sources"])
+            sources = cast("list[str]", tr["sources"])  # shape checked in validate_spec
+            srcs = ", ".join(f"row[{s!r}]" for s in sources)
             expr = f"rt.concat([{srcs}], {target!r}, sep={tr.get('sep', '')!r})"
         elif op == "repair_mojibake":
             expr = f"rt.repair_mojibake({expr}, {src!r}, report=report)"
@@ -652,17 +754,19 @@ def _emit_mapping(m, col, helpers):
     return lines
 
 
-def _stepwise(m, col):
+def _stepwise(m: MappingDict, col: ColumnDict) -> list[str]:
     src = m.get("source")
     steps = []
     for tr in m.get("transforms") or []:
         op = tr["op"]
+        assert isinstance(op, str)  # validate_spec proved membership in OPS
         if op == "constant":
             steps.append(f"v = {tr['value']!r}")
         elif op == "expr":
             steps.append(f"v = _expr_{m['target']}(row, report)")
         elif op == "concat":
-            srcs = ", ".join(f"row[{s!r}]" for s in tr["sources"])
+            sources = cast("list[str]", tr["sources"])  # shape checked in validate_spec
+            srcs = ", ".join(f"row[{s!r}]" for s in sources)
             steps.append(f"v = rt.concat([{srcs}], {m['target']!r}, sep={tr.get('sep', '')!r})")
         elif op == "repair_mojibake":
             steps.append(f"v = rt.repair_mojibake(v, {src!r}, report=report)")
@@ -683,7 +787,7 @@ def _stepwise(m, col):
     return steps
 
 
-def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
+def compile_spec(spec: SpecDict, *, spec_bytes: bytes, spec_filename: str) -> str:
     """spec (parsed) -> pipeline.py source text. Deterministic; no wall clock."""
     col_by_name = validate_spec(spec)
     sha = hashlib.sha256(spec_bytes).hexdigest()
@@ -736,19 +840,19 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
             f"code={code_id!r}, reason={rule.get('reason', '')!r})")
 
     mapping_by_target = {m["target"]: m for m in spec["mappings"]}
-    helpers: list = []
+    helpers: list[str] = []
     field_fn_blocks = []
     field_table = ["FIELD_TRANSFORMS = ["]
     for idx, c in enumerate(spec["target"]["columns"]):
-        m = mapping_by_target.get(c["name"])
+        mapped = mapping_by_target.get(c["name"])
         fn = f"_t_{idx}"
-        if m is None:
+        if mapped is None:
             field_fn_blocks += [f"def {fn}(row, report):",
                                 _cmt(f"    # {c['name']} — unfilled (declared in spec.unmapped)"),
                                 "    return None", "", ""]
         else:
             field_fn_blocks += [f"def {fn}(row, report):",
-                                *_emit_mapping(m, c, helpers), "", ""]
+                                *_emit_mapping(mapped, c, helpers), "", ""]
         field_table.append(f"    ({c['name']!r}, {fn}),")
     field_table.append("]")
 
@@ -825,7 +929,7 @@ def compile_spec(spec: dict, *, spec_bytes: bytes, spec_filename: str) -> str:
 # CLI
 # =====================================================================
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("spec")
     ap.add_argument("-o", "--out", help="output pipeline path "

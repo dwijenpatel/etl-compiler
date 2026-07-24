@@ -109,7 +109,7 @@ The external evidence corpus backing taxonomy/default decisions is likewise loca
 5. **Extract the runtime into a proper package** (`pip install etl-solved-runtime`) — the unit-test suite now exists (`tests/`), so packaging is the remaining step.
 6. **TypeScript runtime + target**; **SQL/dbt target** (analyst-serving surface). Sequenced after the Python path is solid.
 
-Test suite lives in `tests/` (`python3 -m unittest discover -s tests`) — runtime + profiler + compiler + **the type gate** (`tests/test_typecheck.py` runs mypy; strict on the runtime modules, ratchet the rest per `pyproject.toml`). Dev setup: `uv sync --group dev` (mypy lives in the uv dev group; the gate fails with instructions if missing — `ETL_SOLVED_SKIP_TYPECHECK=1` bypasses in minimal envs). Keep it green. Corpus audit ([local-only]): `python3 corpus/audit.py` after profiler changes.
+Test suite lives in `tests/` (`python3 -m unittest discover -s tests`) — runtime + profiler + compiler + **the type gate** (`tests/test_typecheck.py` runs mypy; strict on the runtime modules AND the compiler — typed YAML loader + `SpecDict` contracts, validate-then-cast at checked boundaries; the profiler is the remaining ratchet rung per `pyproject.toml`). Dev setup: `uv sync --group dev` (mypy lives in the uv dev group; the gate fails with instructions if missing — `ETL_SOLVED_SKIP_TYPECHECK=1` bypasses in minimal envs). Keep it green. Corpus audit ([local-only]): `python3 corpus/audit.py` after profiler changes.
 
 ## Things to NOT do
 
