@@ -60,7 +60,7 @@ from etl_coercers import (
     to_int as to_int,
 )
 
-RUNTIME_VERSION = "0.5.0"
+RUNTIME_VERSION = "0.6.0"
 
 
 # ---------------------------------------------------------------------------
@@ -254,29 +254,41 @@ def _run_pipeline(input_path: str, out_dir: str, config: PipelineConfig,
         else:
             seen_rows[rkey] = i
         try:
-            if len(raw) != len(header):  # STR-02
-                raise RowError("STR-02", "<row>", None,
-                               f"expected {len(header)} fields, got {len(raw)}")
-            row: CleanRow = {}
-            for cname, idx in col_index.items():
-                v = clean_text(raw[idx], cname, report,
-                               normalization=pol.get("unicode_normalization", "NFC"),
-                               strip_control=pol.get("strip_control_chars", True),
-                               normalize_ws=pol.get("normalize_unicode_whitespace", True))
-                row[cname] = resolve_null(v, cname, report,
-                                          trim=pol.get("trim_whitespace", True),
-                                          empty_is_null=pol.get("empty_string_is_null", True),
-                                          sentinels=sentinels_by_col.get(cname, ()))
-            out: Mapping[str, CellValue]
-            if disposition == "annotate":
-                assert field_transforms is not None  # validated above
-                out, changes = _transform_annotating(row, report, field_transforms,
-                                                     row_guards)
-                if changes:
-                    report.annotate_row(i, changes)
-            else:
-                out = run_transform(row, report)
-            out_rows.append([_render(out.get(c)) for c in out_columns])
+            try:
+                if len(raw) != len(header):  # STR-02
+                    raise RowError("STR-02", "<row>", None,
+                                   f"expected {len(header)} fields, got {len(raw)}")
+                row: CleanRow = {}
+                for cname, idx in col_index.items():
+                    v = clean_text(raw[idx], cname, report,
+                                   normalization=pol.get("unicode_normalization", "NFC"),
+                                   strip_control=pol.get("strip_control_chars", True),
+                                   normalize_ws=pol.get("normalize_unicode_whitespace", True))
+                    row[cname] = resolve_null(v, cname, report,
+                                              trim=pol.get("trim_whitespace", True),
+                                              empty_is_null=pol.get("empty_string_is_null", True),
+                                              sentinels=sentinels_by_col.get(cname, ()))
+                out: Mapping[str, CellValue]
+                if disposition == "annotate":
+                    assert field_transforms is not None  # validated above
+                    out, changes = _transform_annotating(row, report, field_transforms,
+                                                         row_guards)
+                    if changes:
+                        report.annotate_row(i, changes)
+                else:
+                    out = run_transform(row, report)
+                out_rows.append([_render(out.get(c)) for c in out_columns])
+            except (SkipRow, RowError):
+                raise
+            except Exception as e:  # noqa: BLE001 — ERR-07: unexpected row-level
+                # failure (a buggy expr, an unforeseen data shape). Quarantine the
+                # row and continue — quarantine-not-abort applies to bugs too; a
+                # transform broken for EVERY row is promoted to run failure by the
+                # ERR-02 budget / end-of-run check. Under annotate this quarantines
+                # the whole row: a failure with no attributable field must never be
+                # repaired into clean output.
+                raise RowError("ERR-07", "<row>", None,
+                               f"unexpected {type(e).__name__}: {e}") from e
         except SkipRow as skip:
             report.warn("<row>", skip.code)
         except RowError as err:

@@ -57,6 +57,11 @@ ProfileSummary = TypedDict("ProfileSummary", {
     "row-error": int,
 })
 
+CharsetCandidate = TypedDict("CharsetCandidate", {
+    "encoding": str,
+    "score": float,       # decoded-text plausibility in [0, 1]; see _score_decoding
+})
+
 ProfileResult = TypedDict("ProfileResult", {
     "file": str,
     "encoding": str,
@@ -70,6 +75,13 @@ ProfileResult = TypedDict("ProfileResult", {
 
 MAX_ROWS_DEFAULT = 1000
 SNIFF_DELIMITERS = ",;\t|"       # candidate delimiters the sniffer tries (STR-01)
+
+# ENC-01 charset candidates for non-UTF-8 bytes, in prior order (ties break
+# toward the earlier entry). cp1252 rejects 5 code points latin-1 accepts, so
+# both are listed; shift_jis/euc_jp/gb18030 cover the CJK exports the corpus
+# actually contains (JP portal files were previously mislabeled latin-1).
+CHARSET_CANDIDATES = ("shift_jis", "euc_jp", "gb18030", "cp1252", "latin-1")
+_CHARSET_SAMPLE_BYTES = 65536
 
 KNOWN_SENTINELS = {"n/a", "n.a.", "na", "null", "none", "nil", "-", "--", "---", ".",
                    "?", "#n/a", "unknown", "(blank)", "(null)", "(none)", "(empty)",
@@ -141,16 +153,47 @@ def profile_bytes(raw: bytes, findings: list[Finding]) -> str:
     try:
         raw.decode("utf-8", errors="strict")
     except UnicodeDecodeError as e:
-        try:
-            raw.decode("latin-1")
-            encoding = "latin-1"
+        candidates = _rank_charsets(raw[:_CHARSET_SAMPLE_BYTES])
+        if candidates:
+            best = candidates[0]
+            encoding = best["encoding"]
             findings.append(finding(
                 "ENC-01", "ask",
-                "not valid UTF-8; decodable as latin-1/cp1252 — confirm source encoding",
-                evidence=f"first decode error at byte {e.start}: {e.reason}"))
-        except UnicodeDecodeError:
+                f"not valid UTF-8; best candidate encoding is {best['encoding']!r} "
+                f"(score {best['score']}) — confirm source encoding",
+                evidence={"decode_error": f"byte {e.start}: {e.reason}",
+                          "candidates": candidates}))
+        else:
             findings.append(finding("ENC-01", "ask", "encoding could not be determined"))
     return encoding
+
+
+def _score_decoding(text: str) -> float:
+    """Plausibility of a decoded sample, in [0, 1]. Pure. Penalizes replacement
+    chars, C0 controls (beyond tab/newline/CR), and the C1 block U+0080–U+009F —
+    the fingerprint of CJK bytes misread as Latin-1 (a latin-1 decode never
+    fails, so byte legality alone cannot discriminate; text shape can)."""
+    if not text:
+        return 0.0
+    bad = sum(1 for ch in text
+              if ch == "�"
+              or (ord(ch) < 0x20 and ch not in "\t\n\r")
+              or 0x7f <= ord(ch) <= 0x9f)
+    return round(1.0 - bad / len(text), 4)
+
+
+def _rank_charsets(sample: bytes) -> list[CharsetCandidate]:
+    """Score each candidate that strictly decodes the sample; best first.
+    Ties break toward CHARSET_CANDIDATES order (sort is stable)."""
+    out: list[CharsetCandidate] = []
+    for enc in CHARSET_CANDIDATES:
+        try:
+            decoded = sample.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+        out.append({"encoding": enc, "score": _score_decoding(decoded)})
+    out.sort(key=lambda c: -c["score"])
+    return out
 
 
 def profile_text(text: str, findings: list[Finding]) -> str:

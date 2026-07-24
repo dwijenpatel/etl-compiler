@@ -469,8 +469,8 @@ class TestCompilerInjectionAndFailLoud(unittest.TestCase):
             cs.compile_spec(cs.load_etlspec(bad), spec_bytes=b"x", spec_filename="t.yaml")
 
     def test_unfilled_column_name_cannot_inject_into_comment(self):
-        # The unfilled-column comment interpolates a spec column name; a newline
-        # in it must not break out into executable code.
+        # A newline smuggled into a column name is now REJECTED at load time
+        # (defense by construction), not merely sanitized at emission.
         bad = MINI_SPEC.replace(
             "- {name: note, type: string, nullable: true}",
             '- {name: "note\\n    import os", type: string, nullable: true}').replace(
@@ -479,9 +479,9 @@ class TestCompilerInjectionAndFailLoud(unittest.TestCase):
             "").replace(
             "unfilled_target_columns: []",
             'unfilled_target_columns: ["note\\n    import os"]')
-        code = cs.compile_spec(cs.load_etlspec(bad), spec_bytes=b"x", spec_filename="t.yaml")
-        self.assertNotIn("\n    import os", code)
-        compile(code, "emitted", "exec")  # must be valid, injection-free Python
+        with self.assertRaises(cs.SpecError) as ctx:
+            cs.compile_spec(cs.load_etlspec(bad), spec_bytes=b"x", spec_filename="t.yaml")
+        self.assertIn("control character", str(ctx.exception))
 
     def test_name_with_trailing_newline_rejected(self):
         bad = MINI_SPEC.replace("name: mini", 'name: "mini\\n"')

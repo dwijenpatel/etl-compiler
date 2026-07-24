@@ -131,7 +131,7 @@ class SpecDict(TypedDict, total=False):
     unmapped: UnmappedDict
     review_required: list[object]
 
-COMPILER_VERSION = "0.3.0"
+COMPILER_VERSION = "0.4.0"
 
 
 class SpecError(Exception):
@@ -542,12 +542,42 @@ SUPPORTED_ETLSPEC = {"0.1", "0.2", "0.3"}   # 0.2: skip_rows + repair_mojibake/c
 DISPOSITIONS = {"quarantine", "fail-fast", "annotate"}  # ERR-01 (runtime >= 0.4.0 for annotate)
 
 
+_CONTROL_CHAR_RE = re.compile("[\x00-\x1f\x7f\u2028\u2029]")
+
+
+def _reject_control_chars(value: object, path: str) -> None:
+    """Defense by construction: no spec string may carry control characters —
+    including newlines/tabs and the U+2028/U+2029 separators Python source
+    honors as line breaks — so comment/docstring injection into emitted
+    pipelines is impossible regardless of emission-site discipline (the _cmt
+    guard stays as defense-in-depth). The ONE exemption is the expr op's
+    `python` value: the sanctioned, loud code channel."""
+    if isinstance(value, str):
+        m = _CONTROL_CHAR_RE.search(value)
+        if m:
+            raise SpecError(f"control character {m.group()!r} in {path} — spec "
+                            "strings must be single-line printable text (only "
+                            "the expr op's `python` is exempt)")
+    elif isinstance(value, dict):
+        is_expr = value.get("op") == "expr"
+        for k, v in value.items():
+            key_path = f"{path}.{k}" if isinstance(k, str) else f"{path}.<key>"
+            _reject_control_chars(k, key_path)
+            if is_expr and k == "python":
+                continue  # the sanctioned escape hatch may span lines
+            _reject_control_chars(v, key_path)
+    elif isinstance(value, list):
+        for idx, v in enumerate(value):
+            _reject_control_chars(v, f"{path}[{idx}]")
+
+
 def _require(cond: object, msg: str) -> None:
     if not cond:
         raise SpecError(msg)
 
 
 def validate_spec(spec: SpecDict) -> dict[str, ColumnDict]:
+    _reject_control_chars(spec, "spec")
     for key in ("etlspec", "name", "taxonomy_version", "source", "target",
                 "policies", "mappings"):
         _require(key in spec, f"spec is missing required top-level key {key!r}")
@@ -683,7 +713,8 @@ def _cmt(s: object) -> str:
     or docstring: newlines/CRs collapse to spaces so nothing can break out of the
     line, and `\"\"\"` is defanged so it can't close a docstring. Code reaches the
     pipeline ONLY through the loud `op: expr` hatch — never smuggled via metadata."""
-    return str(s).replace("\r", " ").replace("\n", " ").replace('"""', '”””')
+    return (str(s).replace("\r", " ").replace("\n", " ")
+            .replace("\u2028", " ").replace("\u2029", " ").replace('"""', '”””'))
 
 
 def _mapping_comment(m: MappingDict) -> str:

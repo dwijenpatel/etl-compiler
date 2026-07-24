@@ -24,7 +24,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Literal, Mapping, Sequence, TypedDict, TypeVar, cast
 
-TAXONOMY_VERSION = "0.2"
+TAXONOMY_VERSION = "0.3"
 ISO8601_DATE = "%Y-%m-%d"
 ISO8601_DATETIME = "%Y-%m-%dT%H:%M:%S%z"
 

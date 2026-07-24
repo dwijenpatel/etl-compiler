@@ -3,8 +3,8 @@ name: etl-generator
 description: Interactive ETL code generator built on a failure-mode taxonomy. Use this skill whenever the user wants to transform, map, convert, migrate, load, or clean tabular data (CSV/TSV) from one structure to another, wants ETL or data-pipeline code written, mentions mapping source data to a target schema/format, or asks for "a script to convert this file" — even if they never say "ETL". Also use it when the user provides an existing mapping spec (.etlspec.yaml) and wants the pipeline regenerated or modified, or when they complain about data quality issues (bad dates, nulls, weird characters, encoding problems) in a file they need to process. It profiles samples, interviews the user only about issues actually detected, records every decision in an auditable spec, and generates hardened Python whose edge-case handling lives in a tested runtime module.
 compatibility: Requires Python 3 (standard library only — no third-party packages) and the ability to run bundled scripts. Harness-agnostic; conforms to the Agent Skills open standard.
 metadata:
-  taxonomy-version: "0.2"
-  runtime-version: "0.5.0"
+  taxonomy-version: "0.3"
+  runtime-version: "0.6.0"
 ---
 
 # ETL Generator
@@ -86,7 +86,7 @@ Check: the run completes; the report is written; quarantine counts match expecta
 
 - **Never guess meaning-changing ambiguity.** A wrong BOM decision is annoying; a wrong MDY/DMY decision silently corrupts every row. The taxonomy's `ask` class exists for exactly this line.
 - **Every decision lands in the spec.** If a behavior isn't in the spec, it shouldn't be in the code. Defaults are decisions too — record them.
-- **The runtime is the only place edge-case semantics live.** If a needed behavior is missing from `etl_runtime.py`, add it there (with the taxonomy ID in comments), not inline in the pipeline.
+- **The runtime is the only place edge-case semantics live.** If a needed behavior is missing from `etl_runtime.py`, add it there (with the taxonomy ID in comments), not inline in the pipeline. The runtime is strict-typed (mypy `--strict`) and split on the effect boundary: a deterministic core (`etl_coercers`, whose only effect is counting fixes into the passed report) and a thin I/O driver — keep additions to that standard.
 - **Reports are non-negotiable.** Per-row errors, per-error-type aggregates, and the run summary are always all produced (taxonomy ERR-03). Auto-fixes are counted, never silent (ERR-04).
 - **Same spec → same behavior.** Regeneration from an unchanged spec must not change pipeline behavior.
 

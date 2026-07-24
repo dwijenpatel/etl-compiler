@@ -106,6 +106,54 @@ class TestTyp06Boolean(unittest.TestCase):
         self.assertIn("TYP-06", _ids(result))
 
 
+class TestCharsetDetection(unittest.TestCase):
+    """ENC-01: non-UTF-8 files get RANKED candidate encodings with evidence,
+    not a blind latin-1 fallback that mislabels real Shift-JIS as mojibake."""
+
+    def _profile_bytes(self, raw):
+        path = None
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+        try:
+            return prof.profile_file(path)
+        finally:
+            os.unlink(path)
+
+    def test_shift_jis_file_detected_as_shift_jis_not_latin1(self):
+        header = "観測所番号,都道府県,地点\n".encode("shift_jis")
+        rows = "44132,東京,東京\n44136,大阪,大阪\n".encode("shift_jis")
+        result = self._profile_bytes(header + rows)
+        self.assertEqual(result["encoding"], "shift_jis")
+        enc01 = [f for f in result["findings"] if f["id"] == "ENC-01"]
+        self.assertEqual(len(enc01), 1)
+        self.assertEqual(enc01[0]["class"], "ask")   # never silently guessed
+        # headers decoded readably under the detected encoding
+        self.assertIn("都道府県", result["columns"])
+
+    def test_latin1_accents_still_detected_as_cp1252_family(self):
+        raw = "id,name\n1,café\n2,naïve\n".encode("latin-1")
+        result = self._profile_bytes(raw)
+        self.assertIn(result["encoding"], ("cp1252", "latin-1"))
+        # decoded columns are sane
+        self.assertEqual(result["columns"], ["id", "name"])
+
+    def test_utf8_file_unchanged_no_enc01(self):
+        result = self._profile_bytes("id,name\n1,café\n".encode("utf-8"))
+        self.assertEqual(result["encoding"], "utf-8")
+        self.assertEqual([f for f in result["findings"] if f["id"] == "ENC-01"], [])
+
+    def test_candidates_and_scores_in_evidence(self):
+        raw = "地点,観測値\n東京,12\n".encode("shift_jis")
+        result = self._profile_bytes(raw)
+        enc01 = [f for f in result["findings"] if f["id"] == "ENC-01"][0]
+        ev = enc01["evidence"]
+        self.assertIsInstance(ev, dict)
+        self.assertIn("candidates", ev)
+        self.assertEqual(ev["candidates"][0]["encoding"], "shift_jis")
+
+
 class TestCodeReviewFixes(unittest.TestCase):
     """Fixes from the 2026-07-21 profiler review — verified crash/miss cases."""
 

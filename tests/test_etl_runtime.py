@@ -499,9 +499,30 @@ class TestRunPipeline(unittest.TestCase):
     # Code-review fixes (2026-07-21)
     # ------------------------------------------------------------------
 
-    def test_unexpected_exception_still_writes_reports_exit_1(self):
-        # ERR-05: ANY failure leaves the reports, not a bare traceback — including
-        # a buggy expr raising a non-RowError.
+    def test_unexpected_row_error_quarantines_and_continues(self):
+        # ERR-07: an unexpected exception in ONE row's transform quarantines that
+        # row and the run continues — quarantine-not-abort applies to bugs too.
+        path = self._input("id,name\n1,a\n2,boom\n3,c\n")
+
+        def flaky_transform(row, report):
+            if row["name"] == "boom":
+                raise ValueError("value-dependent bug")
+            return {"id": row["id"], "name": row["name"]}
+
+        res = rt.run_pipeline(input_path=path, out_dir=self.out_dir,
+                              config=self._config(), transform_row=flaky_transform)
+        self.assertEqual(res.exit_code, 2)
+        summary = self._read_json("summary.json")
+        self.assertEqual((summary["rows_out"], summary["rows_quarantined"]), (2, 1))
+        self.assertEqual(summary["errors_by_type"], {"ERR-07:<row>": 1})
+        errors = [json.loads(l) for l in
+                  open(os.path.join(self.out_dir, "errors.jsonl"), encoding="utf-8")]
+        self.assertIn("ValueError", errors[0]["message"])
+        self.assertEqual(errors[0]["csv_line"], "2,boom")  # raw preserved
+
+    def test_unexpected_error_on_every_row_is_still_run_failure(self):
+        # A transform broken for ALL rows is systemic: the end-of-run ERR-02
+        # check converts it to exit 1 — with reports, never a bare traceback.
         path = self._input("id,name\n1,a\n")
 
         def bad_transform(row, report):
@@ -510,9 +531,44 @@ class TestRunPipeline(unittest.TestCase):
         res = rt.run_pipeline(input_path=path, out_dir=self.out_dir,
                               config=self._config(), transform_row=bad_transform)
         self.assertEqual(res.exit_code, 1)
-        self.assertEqual(_run_error(res.report)["code"], "ERR-05")
-        self.assertIn("ValueError", _run_error(res.report)["message"])
-        self.assertTrue(os.path.exists(os.path.join(self.out_dir, "summary.json")))
+        self.assertEqual(_run_error(res.report)["code"], "ERR-02")
+        summary = self._read_json("summary.json")
+        self.assertEqual(summary["errors_by_type"], {"ERR-07:<row>": 1})
+
+    def test_unexpected_error_honors_fail_fast(self):
+        path = self._input("id,name\n1,a\n")
+        cfg = self._config(policies={"error_disposition": "fail-fast"})
+
+        def bad_transform(row, report):
+            raise ValueError("bug")
+
+        res = rt.run_pipeline(input_path=path, out_dir=self.out_dir, config=cfg,
+                              transform_row=bad_transform)
+        self.assertEqual(res.exit_code, 1)
+        self.assertEqual(_run_error(res.report)["code"], "ERR-07")
+
+    def test_annotate_never_repairs_an_unexpected_error_into_output(self):
+        # Under annotate, ERR-07 has no attributable field — the whole row
+        # quarantines rather than being "repaired" into the clean output.
+        path = self._input("id,n\n1,7\n2,boom\n")
+        cfg = self._config(expected_columns=["id", "n"], output_columns=["id", "n"],
+                          policies={"error_disposition": "annotate"})
+
+        def t_id(row, report):
+            return row["id"]
+
+        def t_n(row, report):
+            if row["n"] == "boom":
+                raise ValueError("bug")
+            return rt.to_int(row["n"], "n")
+
+        res = rt.run_pipeline(input_path=path, out_dir=self.out_dir, config=cfg,
+                              field_transforms=[("id", t_id), ("n", t_n)])
+        self.assertEqual(res.exit_code, 2)
+        summary = self._read_json("summary.json")
+        self.assertEqual((summary["rows_out"], summary["rows_quarantined"],
+                          summary["rows_annotated"]), (1, 1, 0))
+        self.assertEqual(summary["errors_by_type"], {"ERR-07:<row>": 1})
 
     def test_err02_small_file_total_failure_is_run_error_not_success(self):
         # A file below min_rows where EVERY row fails must not exit 2 with an

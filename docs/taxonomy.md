@@ -1,11 +1,17 @@
 # ETL Failure-Mode Taxonomy
 
-**Version:** 0.2 (draft)
+**Version:** 0.3 (draft)
 **Status:** Founding artifact for `etl-generator`
 **Author:** Dwijen Patel
-**Date:** July 17, 2026 (v0.1); July 20, 2026 (v0.2)
+**Date:** July 17, 2026 (v0.1); July 20, 2026 (v0.2); July 21, 2026 (v0.3)
 
 **Changelog**
+- **v0.3** (2026-07-21, minor — addition only, no default changed): added **ERR-07**
+  (unexpected row-level failure). Motivation: the runtime's only net for unanticipated
+  exceptions was run-level ERR-05, so one buggy custom expression or unforeseen data
+  shape aborted the whole run — contradicting quarantine-not-abort. ERR-07 gives the
+  row-level catch a taxonomy home; the ERR-02 budget then adjudicates
+  transient-vs-systemic.
 - **v0.2** (2026-07-20, minor — additions only, no default changed): added **TYP-12**
   (magnitude/scale-suffixed numerics), from a validation pass over a 244-file corpus of
   real messy data (NOAA damage fields motivated the entry). Full validation findings,
@@ -335,6 +341,13 @@ These are run-level policies, always present in every spec.
 **ERR-06 · Run provenance**
 - What: "Which code, which spec, which input produced this file?"
 - Policy: every run emits a manifest: spec version + hash, taxonomy version, generator version, input file hash + row count, output row count, quarantine count, timestamp, effective policy table (including defaults applied). Always on.
+
+**ERR-07 · Unexpected row-level failure**
+- What: An exception during a row's transform that no taxonomy entry anticipated — a bug in a custom `expr`, or a data shape the spec never considered. Distinct from ERR-05 (run-level failure): the failure is confined to one row.
+- Detect: runtime catch-all around the row transform (never in the setup/header/IO phases, which stay run-level).
+- Decide: (a) quarantine the row with code ERR-07, preserving the raw row, and continue — the ERR-02 error budget then converts a systemic failure (every row tripping ERR-07) into a run failure; (b) abort the run on first occurrence.
+- **Default: (a) quarantine-and-continue** (the ERR-01 house philosophy applied to bugs: one poisoned row must not destroy an otherwise-good run; a broken transform hits every row and is promoted to run failure by ERR-02). `fail-fast` disposition honors (b). Under `annotate`, ERR-07 quarantines the whole row — a failure with no attributable field must never be repaired into the clean output.
+- Class: row-error.
 
 ---
 

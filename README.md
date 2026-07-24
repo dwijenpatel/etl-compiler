@@ -45,6 +45,12 @@ sample input ──▶ PROFILER ──▶ findings (taxonomy IDs + evidence)
 
 Three properties make the output trustworthy: the **spec** is a complete, auditable record of every edge-case decision (including applied defaults); the **runtime** implements each taxonomy entry exactly once, so every pipeline handles nulls/encodings/dates identically; and **error codes are taxonomy IDs**, so a quarantined row marked `TYP-03` traces straight to the documented decision that governs it.
 
+## Built to a high bar
+
+- **Strict types, enforced — not aspirational.** Every product module (runtime, compiler, profiler) passes `mypy --strict`, and the type check runs as part of the test suite, so it cannot drift. The spec, pipeline config, profiler findings, and every report record are **typed contracts** (`TypedDict`s), not loose dicts — the compiler's emitted config is type-checked against the runtime's contract end-to-end.
+- **An (almost-)pure core.** The runtime is split on the effect boundary: `etl_coercers` is deterministic with exactly one sanctioned effect — counting auto-fixes into an explicitly-passed report accumulator (that counting *is* the product's accounting guarantee). All file I/O and the single wall-clock read live in a thin driver, `etl_runtime`.
+- **Everything is gated.** 130+ unit tests, byte-determinism checks on the compiler, a 244-file real-world corpus audit for the profiler, and the type gate — a regression in behavior, determinism, or type-safety fails the suite.
+
 ## Try it in 30 seconds
 
 ```bash
