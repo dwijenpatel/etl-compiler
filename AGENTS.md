@@ -1,10 +1,10 @@
-# AGENTS.md — etl-solved
+# AGENTS.md — etl-compiler
 
 Context for AI agents working in this repo — any harness (this file follows the AGENTS.md convention; `CLAUDE.md` is a pointer here). Read this first; it is the living handoff, begun at the founding session (July 17–18, 2026).
 
 ## What this project is
 
-**etl-solved** generates correct, conformant ETL code by making every edge-case decision explicit, finite, and recorded. The observation that founded it: ETL fails in the *same recurring ways* (nulls/sentinels, encoding damage, ambiguous dates, silent truncation, inconsistent error reporting), each failure mode has a small finite decision space, and therefore the whole class is generically solvable — by walking a taxonomy instead of improvising.
+**etl-compiler** generates correct, conformant ETL code by making every edge-case decision explicit, finite, and recorded. The observation that founded it: ETL fails in the *same recurring ways* (nulls/sentinels, encoding damage, ambiguous dates, silent truncation, inconsistent error reporting), each failure mode has a small finite decision space, and therefore the whole class is generically solvable — by walking a taxonomy instead of improvising.
 
 **This is not a commercial product.** The explicit goal is that the workflow *exists* and is correct. No revenue, no moat concerns. Open-sourcing is consistent with the goal.
 
@@ -97,7 +97,7 @@ open, deliberately:
 
 ## Prioritized next steps
 
-5. **Extract the runtime into a proper package** (`pip install etl-solved-runtime`) — the unit-test suite now exists (`tests/`), so packaging is the remaining step.
+5. **Extract the runtime into a proper package** (`pip install etl-compiler-runtime`) — the unit-test suite now exists (`tests/`), so packaging is the remaining step.
 6. **TypeScript runtime + target**; **SQL/dbt target** (analyst-serving surface). Sequenced after the Python path is solid.
 
 Test suite lives in `tests/` (`python3 -m unittest discover -s tests`) — runtime + profiler + compiler + **the type gate** (`tests/test_typecheck.py` runs mypy; **all product modules strict** — runtime `CellValue`/config/record contracts, compiler `SpecDict`/typed-YAML-loader, profiler `Finding`/`InterviewGroup`/`ProfileResult`; validate-then-cast at checked boundaries; tests stay at default+check_untyped_defs by design). Dev setup: `uv sync --group dev` (mypy lives in the uv dev group; the gate fails with instructions if missing — `ETL_SOLVED_SKIP_TYPECHECK=1` bypasses in minimal envs). Keep it green. Corpus audit ([local-only]): `python3 corpus/audit.py` after profiler changes.

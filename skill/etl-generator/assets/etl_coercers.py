@@ -1,4 +1,4 @@
-"""etl_coercers — the deterministic core of the etl-solved runtime.
+"""etl_coercers — the deterministic core of the etl-compiler runtime.
 
 Everything in this module is **deterministic and effect-confined**: same inputs
 produce same outputs, and the only permitted effect is counting into the

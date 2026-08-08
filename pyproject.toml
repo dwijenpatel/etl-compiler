@@ -1,7 +1,7 @@
 [project]
-name = "etl-solved"
+name = "etl-compiler"
 version = "0.5.0"
-description = "Dev tooling for the etl-solved repo (the shipped skill itself is stdlib-only; nothing here is a runtime dependency)"
+description = "Dev tooling for the etl-compiler repo (the shipped skill itself is stdlib-only; nothing here is a runtime dependency)"
 requires-python = ">=3.10"
 
 [dependency-groups]

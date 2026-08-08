@@ -1,8 +1,8 @@
-# etl-solved
+# etl-compiler
 
-**ETL fails in the same ways every time. Those ways are enumerable. Enumerated problems are solvable.**
+**Spec-compiled ETL: profile the input, record every decision in an auditable spec, compile to deterministic Python. Bad rows are quarantined and error-coded, never silently coerced.**
 
-etl-solved generates correct, conformant data-transformation code by walking a **failure-mode taxonomy** instead of improvising: weird characters (unicode, escapes, BOMs, mojibake), nulls and their many disguises (empty strings, whitespace, `N/A`, `9999`), ambiguous dates, silent truncation, and error handling that actually reports — per-record, per-error-type, and per-run.
+etl-compiler generates correct, conformant data-transformation code by walking a **failure-mode taxonomy** instead of improvising: weird characters (unicode, escapes, BOMs, mojibake), nulls and their many disguises (empty strings, whitespace, `N/A`, `9999`), ambiguous dates, silent truncation, and error handling that actually reports — per-record, per-error-type, and per-run.
 
 ## The problem with how ETL gets built today
 
@@ -15,7 +15,9 @@ Bad data is the norm, not the exception: **~26% of open-government CSVs fail a n
 
 **None of these preserves the bad row, tells you what happened, and keeps going.**
 
-## What etl-solved does instead
+## What etl-compiler does instead
+
+The founding observation: ETL fails in *recurring, enumerable* ways — so the whole class can be handled systematically instead of improvised per pipeline.
 
 - **Surfaces every decision, corrupts nothing.** Bad rows are **quarantined with their raw form preserved** (reprocessable), never silently coerced, dropped, or padded. Every auto-fix is **counted**, never silent.
 - **Never guesses meaning-changing ambiguity.** MDY-vs-DMY dates, decimal locale, `N/A`-vs-`9999` sentinels — the taxonomy's `ask` class *always* asks; in unattended mode it quarantines rather than reinterprets. (A wrong BOM strip is annoying; a wrong date format silently corrupts every row.)
